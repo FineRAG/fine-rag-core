@@ -1,0 +1,8 @@
+# Development workflow artifacts kept local or in separate tooling repo
+.ai/
+.github/
+docs/epics/
+docs/workflow_review.md
+docs/workflow_review_guide.md
+scripts/
+tools/
