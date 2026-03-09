@@ -30,7 +30,7 @@ Out of scope:
 ## Task Checklist
 
 - [x] `E4-T1` Ingestion Dashboard UI Package (React + Vite) (`01-4E-Task.md`)
-- [ ] `E4-T2` Search Query UI Package (React + Vite) (`02-4E-Task.md`)
+- [x] `E4-T2` Search Query UI Package (React + Vite) (`02-4E-Task.md`)
 - [ ] `E4-T3` PostgreSQL Repository Adapter and Persistence Wiring (`03-4E-Task.md`)
 - [ ] `E4-T4` External PostgreSQL URL Integration and Migration Bootstrap Strategy (`04-4E-Task.md`)
 - [ ] `E4-T5` AWS SQS + DLQ Adapter Wiring, Secrets, and Local Fallback (`05-4E-Task.md`)
@@ -78,3 +78,9 @@ Soft dependencies:
 
 1. Task checkboxes can be marked complete only with command evidence in each task file.
 2. If a blocker remains, document it in the task file Notes section with owner and next action.
+
+## Status Rollup
+
+- Not started: 3
+- In progress: 0
+- Completed: 2
