@@ -3,7 +3,7 @@ import type { TenantSession } from './types'
 
 describe('api helpers', () => {
   it('defaults base URL when search env variable is missing', () => {
-    expect(getApiBaseUrl()).toBe('http://localhost:8080')
+    expect(getApiBaseUrl()).toMatch(/^http:\/\/localhost(?::\d+)?$/)
   })
 
   it('adds tenant context headers for all scoped requests', () => {

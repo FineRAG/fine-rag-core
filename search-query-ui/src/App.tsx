@@ -10,39 +10,40 @@ import type {
   TenantSession,
 } from './types'
 
+type ChatTurn = {
+  id: string
+  question: string
+  answer: string
+  citations: SearchCitation[]
+  trace: SearchTrace | null
+}
+
 function App() {
   const [username, setUsername] = useState('')
   const [apiKeyInput, setApiKeyInput] = useState('')
-  const [requestIdInput, setRequestIdInput] = useState(createRequestId())
 
   const [authStatus, setAuthStatus] = useState<AuthStatus>('logged_out')
   const [authSession, setAuthSession] = useState<AuthSession | null>(null)
   const [tenants, setTenants] = useState<TenantRecord[]>([])
   const [activeSession, setActiveSession] = useState<TenantSession | null>(null)
+
   const [queryText, setQueryText] = useState('')
-  const [answer, setAnswer] = useState('')
-  const [citations, setCitations] = useState<SearchCitation[]>([])
-  const [trace, setTrace] = useState<SearchTrace | null>(null)
+  const [turns, setTurns] = useState<ChatTurn[]>([])
   const [lastError, setLastError] = useState<string | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const [statusMessage, setStatusMessage] = useState('Session is not active.')
 
-  const canLogin = useMemo(() => {
-    return username.trim() && apiKeyInput.trim() && requestIdInput.trim()
-  }, [username, apiKeyInput, requestIdInput])
+  const canLogin = useMemo(() => username.trim() && apiKeyInput.trim(), [username, apiKeyInput])
 
   function clearSession(message: string, expired = false) {
     setAuthStatus(expired ? 'expired' : 'logged_out')
     setAuthSession(null)
     setActiveSession(null)
     setTenants([])
-    setAnswer('')
-    setCitations([])
-    setTrace(null)
+    setTurns([])
     setQueryText('')
     setIsStreaming(false)
-    setRequestIdInput(createRequestId())
     setLastError(null)
     setStatusMessage(message)
   }
@@ -54,7 +55,7 @@ function App() {
       const next = await login({
         username: username.trim(),
         apiKey: apiKeyInput.trim(),
-        requestId: requestIdInput.trim(),
+        requestId: createRequestId(),
       })
       setAuthSession(next)
       setAuthStatus('authenticated')
@@ -65,7 +66,7 @@ function App() {
 
       if (tenantList.length === 1) {
         setActiveSession({ ...next, tenantId: tenantList[0].tenantId })
-        setStatusMessage(`Tenant auto-opened: ${tenantList[0].tenantId}`)
+        setStatusMessage(`Tenant auto-opened: ${tenantList[0].displayName}`)
       } else {
         setStatusMessage('Select a tenant to start querying.')
       }
@@ -85,33 +86,34 @@ function App() {
       return
     }
     setActiveSession({ ...authSession, tenantId })
-    setAnswer('')
-    setCitations([])
-    setTrace(null)
     setStatusMessage(`Active tenant session: ${tenantId}`)
   }
 
-  function handleStreamEvent(event: StreamEvent) {
-    if (event.type === 'token') {
-      setAnswer((current) => `${current}${event.token}`)
-      return
-    }
-    if (event.type === 'citation') {
-      setCitations((current) => [...current, event.citation])
-      return
-    }
-    if (event.type === 'trace') {
-      setTrace(event.trace)
-      return
-    }
-    if (event.type === 'done') {
-      if (event.citations) {
-        setCitations(event.citations)
-      }
-      if (event.trace) {
-        setTrace(event.trace)
-      }
-    }
+  function applyStreamEvent(turnId: string, event: StreamEvent) {
+    setTurns((current) =>
+      current.map((turn) => {
+        if (turn.id !== turnId) {
+          return turn
+        }
+        if (event.type === 'token') {
+          return { ...turn, answer: `${turn.answer}${event.token}` }
+        }
+        if (event.type === 'citation') {
+          return { ...turn, citations: [...turn.citations, event.citation] }
+        }
+        if (event.type === 'trace') {
+          return { ...turn, trace: event.trace }
+        }
+        if (event.type === 'done') {
+          return {
+            ...turn,
+            citations: event.citations ?? turn.citations,
+            trace: event.trace ?? turn.trace,
+          }
+        }
+        return turn
+      }),
+    )
   }
 
   async function runQuery() {
@@ -119,11 +121,22 @@ function App() {
       return
     }
 
-    setAnswer('')
-    setCitations([])
-    setTrace(null)
+    const question = queryText.trim()
+    const turnId = `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+
+    setQueryText('')
     setLastError(null)
     setIsStreaming(true)
+    setTurns((current) => [
+      ...current,
+      {
+        id: turnId,
+        question,
+        answer: '',
+        citations: [],
+        trace: null,
+      },
+    ])
 
     abortControllerRef.current?.abort()
     const controller = new AbortController()
@@ -132,9 +145,9 @@ function App() {
     try {
       await startSearchStream(
         activeSession,
-        queryText,
+        question,
         {
-          onEvent: handleStreamEvent,
+          onEvent: (event) => applyStreamEvent(turnId, event),
           onStatus: setStatusMessage,
         },
         controller.signal,
@@ -160,34 +173,19 @@ function App() {
   }
 
   return (
-    <main className="dashboard-root">
-      <header className="hero">
-        <p className="eyebrow">Enterprise Go RAG</p>
-        <h1>Search Query UI</h1>
-        <p className="subtitle">Run tenant-scoped search, stream answers, and inspect citations and trace metadata.</p>
+    <main className="chat-root">
+      <header className="chat-header">
+        <p className="eyebrow">Enterprise FineR</p>
+        <h1>Query</h1>
+        <p className="subtitle">Ask one focused question and stream answers from your tenant knowledge base.</p>
       </header>
 
       {authStatus !== 'authenticated' || !authSession ? (
-      <section className="card session-card" data-testid="login-gate">
-        <h2>Login</h2>
-        <div className="field-grid">
+        <section className="login-card" data-testid="login-gate">
+          <h2>Sign In</h2>
           <label>
             Username
-            <input
-              data-testid="username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="admin"
-            />
-          </label>
-          <label>
-            Request ID
-            <input
-              data-testid="request-id"
-              value={requestIdInput}
-              onChange={(event) => setRequestIdInput(event.target.value)}
-              placeholder="req-001"
-            />
+            <input data-testid="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="admin" />
           </label>
           <label>
             API Key
@@ -196,23 +194,21 @@ function App() {
               type="password"
               value={apiKeyInput}
               onChange={(event) => setApiKeyInput(event.target.value)}
-              placeholder="tenant key"
+              placeholder="Enter API key"
             />
           </label>
-        </div>
-        <button type="button" disabled={!canLogin || authStatus === 'authenticating'} onClick={() => void startSession()}>
-          Login
-        </button>
-      </section>
+          <button type="button" disabled={!canLogin || authStatus === 'authenticating'} onClick={() => void startSession()}>
+            Login
+          </button>
+        </section>
       ) : null}
 
       {authStatus === 'authenticated' && authSession && !activeSession ? (
-        <section className="card session-card" data-testid="tenant-resolver">
-          <h2>Tenant Resolver</h2>
-          {tenants.length === 0 ? <p>No tenant available for this account.</p> : null}
-          <ul className="list-reset">
+        <section className="login-card" data-testid="tenant-resolver">
+          <h2>Select Tenant</h2>
+          <ul className="tenant-list">
             {tenants.map((tenant) => (
-              <li key={tenant.tenantId} className="list-item">
+              <li key={tenant.tenantId}>
                 <span>{tenant.displayName}</span>
                 <button type="button" onClick={() => activateTenant(tenant.tenantId)}>
                   Open
@@ -224,72 +220,74 @@ function App() {
         </section>
       ) : null}
 
-      {activeSession ? <section className="layout-grid" data-testid="query-workspace">
-        <article className="card">
-          <h2>Query Panel</h2>
-          <label>
-            Query Text
-            <textarea
+      {activeSession ? (
+        <section className="chat-shell" data-testid="query-workspace">
+          <div className="chat-toolbar">
+            <span>{`Tenant: ${tenants.find((tenant) => tenant.tenantId === activeSession.tenantId)?.displayName ?? activeSession.tenantId}`}</span>
+            {tenants.length > 1 ? (
+              <select
+                data-testid="tenant-switcher"
+                value={activeSession.tenantId}
+                onChange={(event) => activateTenant(event.target.value)}
+              >
+                {tenants.map((tenant) => (
+                  <option key={tenant.tenantId} value={tenant.tenantId}>
+                    {tenant.displayName}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <button type="button" onClick={() => clearSession('Logged out.')}>Logout</button>
+          </div>
+
+          <section className="chat-stream" data-testid="answer-panel">
+            {turns.length === 0 ? <p className="muted">No conversations yet. Ask your first question.</p> : null}
+            {turns.map((turn) => (
+              <article key={turn.id} className="turn">
+                <div className="bubble question">{turn.question}</div>
+                <div className="bubble answer">{turn.answer || (isStreaming ? 'Streaming response...' : 'No response.')}</div>
+                {turn.citations.length > 0 ? (
+                  <div className="citations">
+                    {turn.citations.map((citation) => (
+                      <div key={citation.id} className="citation-item">
+                        <strong>{citation.title}</strong>
+                        <span>{citation.uri}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {turn.trace ? (
+                  <pre className="trace-panel" data-testid="trace-panel">
+                    {JSON.stringify(turn.trace, null, 2)}
+                  </pre>
+                ) : null}
+              </article>
+            ))}
+          </section>
+
+          <div className="composer">
+            <input
               data-testid="query-text"
               value={queryText}
               onChange={(event) => setQueryText(event.target.value)}
-              placeholder="Ask a question about your tenant corpus..."
-              rows={5}
+              placeholder="Ask about your documents..."
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  void runQuery()
+                }
+              }}
             />
-          </label>
-          <div className="row-actions">
-            <button
-              type="button"
-              onClick={() => {
-                void runQuery()
-              }}
-              disabled={!queryText.trim() || isStreaming}
-            >
-              Stream Answer
+            <button type="button" onClick={() => void runQuery()} disabled={!queryText.trim() || isStreaming}>
+              Send
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                stopQuery()
-              }}
-              disabled={!isStreaming}
-            >
-              Stop Stream
+            <button type="button" onClick={stopQuery} disabled={!isStreaming}>
+              Stop
             </button>
           </div>
           {lastError ? <p className="error-text">{lastError}</p> : null}
-        </article>
-      </section> : null}
-
-      {activeSession ? <section className="card">
-        <h2>Streaming Answer</h2>
-        <pre className="answer-panel" data-testid="answer-panel">
-          {answer || 'No streamed answer yet.'}
-        </pre>
-
-        <h3>Citations</h3>
-        {citations.length === 0 ? (
-          <p className="muted">No citations emitted yet.</p>
-        ) : (
-          <ul className="list-reset">
-            {citations.map((citation) => (
-              <li key={citation.id} className="list-item">
-                <div>
-                  <strong>{citation.title}</strong>
-                  <div>{citation.uri}</div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <h3>Trace Metadata</h3>
-        <pre className="trace-panel" data-testid="trace-panel">
-          {trace ? JSON.stringify(trace, null, 2) : 'No trace metadata yet.'}
-        </pre>
-      </section> : null}
-
-      {activeSession ? <button type="button" onClick={() => clearSession('Logged out.')}>Logout</button> : null}
+        </section>
+      ) : null}
 
       <footer className="status-line" data-testid="status-message">
         {statusMessage}

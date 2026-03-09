@@ -79,12 +79,12 @@ export type IngestionPayload =
   | {
       sourceMode: 'uri'
       sourceUri: string
-      checksum: string
+      checksum?: string
     }
   | {
       sourceMode: 'local'
       sourceUri: string
-      checksum: string
+      checksum?: string
       objectKeys: string[]
       localItems: LocalItem[]
     }

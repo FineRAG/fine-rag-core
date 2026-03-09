@@ -38,14 +38,13 @@ describe('search query UI integration flow', () => {
     expect(screen.queryByTestId('query-workspace')).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByTestId('username'), { target: { value: 'alice' } })
-    fireEvent.change(screen.getByTestId('request-id'), { target: { value: 'req-1' } })
     fireEvent.change(screen.getByTestId('api-key'), { target: { value: 'k-123' } })
     fireEvent.click(screen.getByRole('button', { name: 'Login' }))
 
     await screen.findByTestId('query-workspace')
 
     fireEvent.change(screen.getByTestId('query-text'), { target: { value: 'What is onboarding?' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Stream Answer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('answer-panel').textContent).toContain('Hello tenant')
@@ -75,14 +74,13 @@ describe('search query UI integration flow', () => {
     render(<App />)
 
     fireEvent.change(screen.getByTestId('username'), { target: { value: 'alice' } })
-    fireEvent.change(screen.getByTestId('request-id'), { target: { value: 'req-2' } })
     fireEvent.change(screen.getByTestId('api-key'), { target: { value: 'k-999' } })
     fireEvent.click(screen.getByRole('button', { name: 'Login' }))
 
     await screen.findByTestId('query-workspace')
 
     fireEvent.change(screen.getByTestId('query-text'), { target: { value: 'retry me' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Stream Answer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     await screen.findByText('Session expired. Please log in again.')
     expect(screen.getByTestId('login-gate')).toBeInTheDocument()

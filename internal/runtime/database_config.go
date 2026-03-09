@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -140,6 +141,15 @@ func OpenPostgresDB(ctx context.Context, openFn func(driverName, dataSourceName 
 func getEnv(lookupEnv func(string) (string, bool), key string) string {
 	if lookupEnv == nil {
 		return ""
+	}
+	if filePath, ok := lookupEnv(key + "_FILE"); ok {
+		if trimmed := strings.TrimSpace(filePath); trimmed != "" {
+			if raw, err := os.ReadFile(trimmed); err == nil {
+				if value := strings.TrimSpace(string(raw)); value != "" {
+					return value
+				}
+			}
+		}
 	}
 	v, _ := lookupEnv(key)
 	return v

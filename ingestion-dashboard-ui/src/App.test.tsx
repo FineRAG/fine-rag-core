@@ -29,7 +29,8 @@ describe('ingestion dashboard integration flow', () => {
       expect(screen.getByTestId('dashboard')).toBeInTheDocument()
     })
 
-    expect(screen.getByDisplayValue('55')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Tenant A Workspace' })).toBeInTheDocument()
+    expect(screen.getByText('55')).toBeInTheDocument()
     expect(screen.getByTestId('status-message').textContent).toContain('Tenant auto-opened')
   })
 
@@ -63,7 +64,6 @@ describe('ingestion dashboard integration flow', () => {
     fireEvent.change(screen.getByTestId('source-uri'), {
       target: { value: 's3://tenant-a-ap-south-1/docs/new.txt' },
     })
-    fireEvent.change(screen.getByTestId('checksum'), { target: { value: 'abc' } })
     fireEvent.click(screen.getByRole('button', { name: 'Submit Job' }))
 
     await screen.findByText('job-2')
@@ -129,7 +129,6 @@ describe('ingestion dashboard integration flow', () => {
       },
     })
 
-    fireEvent.change(screen.getByTestId('checksum'), { target: { value: 'abc' } })
     fireEvent.click(screen.getByRole('button', { name: 'Submit Job' }))
 
     await screen.findByText('job-local-1')

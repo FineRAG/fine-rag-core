@@ -11,3 +11,6 @@ tools/
 run_stack_with_tunnel.sh
 cloud-apps.conf
 setup_cloud_proxy.sh
+
+# Local Docker secrets material
+secrets/*.txt

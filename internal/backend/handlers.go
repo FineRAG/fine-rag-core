@@ -6,12 +6,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"enterprise-go-rag/internal/contracts"
 	"enterprise-go-rag/internal/repository"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 type dbUser struct {
@@ -178,6 +181,7 @@ func (s *Server) handlePresign(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Files []struct {
 			Name         string `json:"name"`
+			Size         int64  `json:"size"`
 			Type         string `json:"type"`
 			RelativePath string `json:"relativePath"`
 		} `json:"files"`
@@ -196,17 +200,48 @@ func (s *Server) handlePresign(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]map[string]any, 0, len(req.Files))
 	for _, file := range req.Files {
+		if file.Size <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid_file_size", fmt.Sprintf("file %q must include size > 0", file.Name))
+			return
+		}
+		if file.Size > s.cfg.MaxObjectBytes {
+			writeError(w, http.StatusBadRequest, "object_too_large", fmt.Sprintf("file %q exceeds max size of %d bytes", file.Name, s.cfg.MaxObjectBytes))
+			return
+		}
 		rel := sanitizeRelativePath(file.RelativePath)
 		if rel == "" {
 			rel = sanitizeRelativePath(file.Name)
 		}
 		key := fmt.Sprintf("%s/%s/%s", tenantID, time.Now().UTC().Format("20060102"), rel)
-		uploadURL := fmt.Sprintf("%s/%s/%s", base, s.cfg.UploadBucket, key)
+		expiresAt := time.Now().UTC().Add(s.cfg.PresignTTL)
+		presigned, err := s.presign.PresignPutObject(r.Context(), &s3.PutObjectInput{
+			Bucket:      &s.cfg.UploadBucket,
+			Key:         &key,
+			ContentType: optionalString(strings.TrimSpace(file.Type)),
+		}, func(opts *s3.PresignOptions) {
+			opts.Expires = s.cfg.PresignTTL
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "presign_failed", err.Error())
+			return
+		}
+		uploadURL := presigned.URL
+		if strings.HasPrefix(uploadURL, "https://") && strings.HasPrefix(base, "http://") {
+			uploadURL = strings.Replace(uploadURL, "https://", "http://", 1)
+		}
 		headers := map[string]string{}
 		if strings.TrimSpace(file.Type) != "" {
 			headers["Content-Type"] = file.Type
 		}
-		items = append(items, map[string]any{"relativePath": rel, "objectKey": key, "uploadUrl": uploadURL, "headers": headers})
+		items = append(items, map[string]any{
+			"relativePath":     rel,
+			"objectKey":        key,
+			"uploadUrl":        uploadURL,
+			"headers":          headers,
+			"expiresAt":        expiresAt.Format(time.RFC3339),
+			"expiresInSeconds": int(s.cfg.PresignTTL.Seconds()),
+			"maxObjectBytes":   s.cfg.MaxObjectBytes,
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"uploads": items})
 }
@@ -224,16 +259,30 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	if sourceMode == "" {
 		sourceMode = "uri"
 	}
-	if sourceURI == "" || checksum == "" {
-		writeError(w, http.StatusBadRequest, "invalid_payload", "sourceUri and checksum are required")
+	if sourceURI == "" {
+		writeError(w, http.StatusBadRequest, "invalid_payload", "sourceUri is required")
 		return
+	}
+	if checksum == "" {
+		checksum = hashHex(sourceURI)
 	}
 	jobID := "job-" + randomString(10)
 	now := time.Now().UTC()
 	payloadJSON, _ := json.Marshal(payload)
 	totalFiles := inferTotalFiles(payload)
+	chunkCount, payloadBytes, indexErr := s.indexPayloadArtifacts(r.Context(), contracts.TenantID(tenantID), jobID, checksum, sourceURI, payload)
+	if indexErr != nil {
+		writeError(w, http.StatusBadRequest, "indexing_failed", indexErr.Error())
+		return
+	}
+	if chunkCount <= 0 {
+		chunkCount = maxInt(totalFiles, 1)
+	}
+	if payloadBytes <= 0 {
+		payloadBytes = len(payloadJSON)
+	}
 	_, err := s.db.ExecContext(r.Context(), `INSERT INTO ingestion_jobs (job_id, tenant_id, source_uri, checksum, status, stage, processed_files, total_files, successful_files, failed_files, policy_code, policy_reason, source_mode, payload_json, chunk_count, payload_bytes, submitted_at, updated_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18)`, jobID, tenantID, sourceURI, checksum, "queued", "cleanup", 0, totalFiles, 0, 0, "", "", sourceMode, string(payloadJSON), maxInt(totalFiles, 1)*8, len(payloadJSON), now, now)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18)`, jobID, tenantID, sourceURI, checksum, "queued", "cleanup", 0, totalFiles, 0, 0, "", "", sourceMode, string(payloadJSON), chunkCount, payloadBytes, now, now)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "job_submit_failed", err.Error())
 		return
@@ -330,7 +379,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if req.TopK <= 0 {
 		req.TopK = 5
 	}
-	query := contracts.RetrievalQuery{TenantID: contracts.TenantID(tenantID), RequestID: "req-" + randomString(8), Text: strings.TrimSpace(req.QueryText), TopK: req.TopK}
+	requestID := requestIDFromContext(r.Context())
+	if requestID == "" {
+		requestID = "req-" + randomString(8)
+	}
+	query := contracts.RetrievalQuery{TenantID: contracts.TenantID(tenantID), RequestID: requestID, Text: strings.TrimSpace(req.QueryText), TopK: req.TopK}
 	meta := contracts.RequestMetadata{TenantID: contracts.TenantID(tenantID), RequestID: query.RequestID, SourceIP: r.RemoteAddr, UserAgent: r.UserAgent()}
 	result, err := s.retrieval.Search(r.Context(), meta, query)
 	if err != nil {
@@ -349,7 +402,11 @@ func (s *Server) handleSearchStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	query := contracts.RetrievalQuery{TenantID: contracts.TenantID(tenantID), RequestID: "req-" + randomString(8), Text: strings.TrimSpace(req.QueryText), TopK: 5}
+	requestID := requestIDFromContext(r.Context())
+	if requestID == "" {
+		requestID = "req-" + randomString(8)
+	}
+	query := contracts.RetrievalQuery{TenantID: contracts.TenantID(tenantID), RequestID: requestID, Text: strings.TrimSpace(req.QueryText), TopK: 5}
 	meta := contracts.RequestMetadata{TenantID: contracts.TenantID(tenantID), RequestID: query.RequestID, SourceIP: r.RemoteAddr, UserAgent: r.UserAgent()}
 	result, err := s.retrieval.Search(r.Context(), meta, query)
 	if err != nil {
@@ -457,4 +514,170 @@ func sanitizeRelativePath(raw string) string {
 		return "file.bin"
 	}
 	return value
+}
+
+func (s *Server) indexPayloadArtifacts(ctx context.Context, tenantID contracts.TenantID, jobID string, checksum string, fallbackSourceURI string, payload map[string]any) (int, int, error) {
+	if s.index == nil || s.minio == nil {
+		return 0, 0, nil
+	}
+	objectKeys := readStringArray(payload["objectKeys"])
+	if len(objectKeys) == 0 {
+		return 0, 0, nil
+	}
+
+	localItemByPath := map[string]map[string]any{}
+	if localItems, ok := payload["localItems"].([]any); ok {
+		for _, item := range localItems {
+			if asMap, mapOK := item.(map[string]any); mapOK {
+				relativePath := strings.TrimSpace(asString(asMap["relativePath"]))
+				if relativePath != "" {
+					localItemByPath[relativePath] = asMap
+				}
+			}
+		}
+	}
+
+	records := make([]contracts.VectorRecord, 0, len(objectKeys))
+	indexedChunks := 0
+	payloadBytes := 0
+	now := time.Now().UTC()
+
+	for keyIndex, objectKey := range objectKeys {
+		key := strings.TrimSpace(objectKey)
+		if key == "" {
+			continue
+		}
+		input := &s3.GetObjectInput{Bucket: &s.cfg.UploadBucket, Key: &key}
+		object, err := s.minio.GetObject(ctx, input)
+		if err != nil {
+			return 0, 0, fmt.Errorf("read object %q: %w", key, err)
+		}
+		bytes, readErr := io.ReadAll(io.LimitReader(object.Body, s.cfg.MaxObjectBytes))
+		_ = object.Body.Close()
+		if readErr != nil {
+			return 0, 0, fmt.Errorf("read object body %q: %w", key, readErr)
+		}
+		payloadBytes += len(bytes)
+
+		relativePath := key
+		if idx := strings.LastIndex(key, "/"); idx >= 0 && idx+1 < len(key) {
+			relativePath = key[idx+1:]
+		}
+
+		sourceURI := fallbackSourceURI
+		if sourceURI == "" {
+			sourceURI = "s3://" + s.cfg.UploadBucket + "/" + key
+		}
+
+		text := extractSearchableText(bytes)
+		if text == "" {
+			text = "uploaded document " + relativePath + " for tenant " + string(tenantID)
+		}
+		chunks := chunkText(text, 480)
+		for chunkIndex, chunk := range chunks {
+			record := contracts.VectorRecord{
+				RecordID:  fmt.Sprintf("vec-%s-%d-%d", jobID, keyIndex, chunkIndex),
+				TenantID:  tenantID,
+				JobID:     jobID,
+				ChunkText: chunk,
+				Embedding: deterministicEmbedding(chunk),
+				Metadata: map[string]string{
+					"object_key":    key,
+					"relative_path": relativePath,
+				},
+				IndexedAt:  now,
+				SourceURI:  sourceURI,
+				Checksum:   checksum,
+				RetryCount: 0,
+			}
+			records = append(records, record)
+			indexedChunks++
+		}
+	}
+
+	if len(records) == 0 {
+		return 0, payloadBytes, nil
+	}
+	if err := s.index.Upsert(ctx, records); err != nil {
+		return 0, 0, err
+	}
+	return indexedChunks, payloadBytes, nil
+}
+
+func readStringArray(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	output := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, stringOK := item.(string); stringOK {
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				output = append(output, trimmed)
+			}
+		}
+	}
+	return output
+}
+
+func extractSearchableText(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	builder := strings.Builder{}
+	for _, b := range payload {
+		if (b >= 32 && b <= 126) || b == '\n' || b == '\r' || b == '\t' {
+			builder.WriteByte(b)
+			continue
+		}
+		builder.WriteByte(' ')
+	}
+	text := strings.Join(strings.Fields(builder.String()), " ")
+	if len(text) > 12000 {
+		return text[:12000]
+	}
+	return text
+}
+
+func chunkText(text string, maxLen int) []string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	if maxLen <= 0 {
+		maxLen = 480
+	}
+	words := strings.Fields(trimmed)
+	if len(words) == 0 {
+		return nil
+	}
+	chunks := make([]string, 0, len(words)/24+1)
+	current := words[0]
+	for _, word := range words[1:] {
+		candidate := current + " " + word
+		if len(candidate) > maxLen {
+			chunks = append(chunks, current)
+			current = word
+			continue
+		}
+		current = candidate
+	}
+	chunks = append(chunks, current)
+	return chunks
+}
+
+func deterministicEmbedding(text string) []float32 {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(text))))
+	vector := make([]float32, 16)
+	for i := 0; i < len(vector); i++ {
+		vector[i] = float32(sum[i]) / 255.0
+	}
+	return vector
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }

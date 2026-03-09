@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   fetchIngestionJobs,
   fetchKnowledgeBases,
@@ -10,7 +10,6 @@ import {
   serializeIngestionPayloadFromLocal,
   serializeIngestionPayloadFromUri,
   SessionExpiredError,
-  startIngestionProgressStream,
   submitIngestionJob,
   uploadLocalFilesToMinio,
 } from './api'
@@ -18,7 +17,6 @@ import type {
   AuthSession,
   AuthStatus,
   IngestionJob,
-  IngestionProgressEvent,
   KnowledgeBaseRecord,
   LocalItem,
   SourceMode,
@@ -34,10 +32,6 @@ type LocalSelectionResult = {
 }
 
 const ALLOWED_EXTENSIONS = new Set(['.txt', '.md', '.pdf', '.csv', '.json', '.html', '.doc', '.docx'])
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) {
@@ -66,7 +60,6 @@ function App() {
 
   const [sourceMode, setSourceMode] = useState<SourceMode>('uri')
   const [sourceUri, setSourceUri] = useState('')
-  const [checksum, setChecksum] = useState('')
   const [localItems, setLocalItems] = useState<LocalItem[]>([])
   const [filesByRelativePath, setFilesByRelativePath] = useState<Map<string, File>>(new Map())
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -92,80 +85,10 @@ function App() {
 
   const canSubmit = useMemo(() => {
     if (sourceMode === 'uri') {
-      return !!sourceUri.trim() && !!checksum.trim() && !isSubmitting
+      return !!sourceUri.trim() && !isSubmitting
     }
-    return localItems.length > 0 && !!checksum.trim() && !isSubmitting
-  }, [checksum, isSubmitting, localItems.length, sourceMode, sourceUri])
-
-  const mergeProgressEvent = useCallback((event: IngestionProgressEvent) => {
-    if (event.job) {
-      setJobs((current) => {
-        const index = current.findIndex((item) => item.jobId === event.job?.jobId)
-        if (index < 0) {
-          return [event.job as IngestionJob, ...current]
-        }
-        const next = [...current]
-        next[index] = { ...next[index], ...(event.job as IngestionJob) }
-        return next
-      })
-      return
-    }
-
-    if (!event.jobId) {
-      return
-    }
-
-    setJobs((current) => {
-      const index = current.findIndex((item) => item.jobId === event.jobId)
-      if (index < 0) {
-        const created: IngestionJob = {
-          jobId: event.jobId as string,
-          sourceUri: 'stream://unknown',
-          status: 'processing',
-          submittedAt: new Date().toISOString(),
-        }
-        return [created, ...current]
-      }
-
-      const next = [...current]
-      const target = { ...next[index] }
-      if (event.stage) {
-        target.stage = event.stage
-      }
-      if (typeof event.processedFiles === 'number') {
-        target.processedFiles = event.processedFiles
-      }
-      if (typeof event.totalFiles === 'number') {
-        target.totalFiles = event.totalFiles
-      }
-      if (typeof event.successfulFiles === 'number') {
-        target.successfulFiles = event.successfulFiles
-      }
-      if (typeof event.failedFiles === 'number') {
-        target.failedFiles = event.failedFiles
-      }
-      if (event.policyCode) {
-        target.policyCode = event.policyCode
-      }
-      if (event.policyReason) {
-        target.policyReason = event.policyReason
-      }
-      if (event.fileStatus) {
-        const existing = target.fileStatuses ?? []
-        const fileIndex = existing.findIndex((item) => item.path === event.fileStatus?.path)
-        if (fileIndex < 0) {
-          target.fileStatuses = [...existing, event.fileStatus]
-        } else {
-          const files = [...existing]
-          files[fileIndex] = { ...files[fileIndex], ...event.fileStatus }
-          target.fileStatuses = files
-        }
-      }
-
-      next[index] = target
-      return next
-    })
-  }, [])
+    return localItems.length > 0 && !isSubmitting
+  }, [isSubmitting, localItems.length, sourceMode, sourceUri])
 
   const refreshData = useCallback(async (session: TenantSession) => {
     const [jobsResponse, kbResponse, vectorResponse] = await Promise.all([
@@ -194,7 +117,6 @@ function App() {
       setKnowledgeBases([])
       setVectorStats(null)
       setSourceUri('')
-      setChecksum('')
       clearLocalSelection()
       setSourceMode('uri')
       setPassword('')
@@ -214,7 +136,6 @@ function App() {
     setActiveSession(next)
     clearLocalSelection()
     setSourceUri('')
-    setChecksum('')
     await refreshData(next)
     setStatusMessage(`Active tenant session: ${tenantId}`)
   }
@@ -310,27 +231,21 @@ function App() {
     setIsSubmitting(true)
     try {
       if (sourceMode === 'uri') {
-        const payload = serializeIngestionPayloadFromUri(sourceUri, checksum)
+        const payload = serializeIngestionPayloadFromUri(sourceUri)
         const created = await submitIngestionJob(activeSession, payload)
         setJobs((current) => [created, ...current])
         setSourceUri('')
-        setChecksum('')
         setStatusMessage(`Job ${created.jobId} queued for ${activeSession.tenantId}.`)
         return
       }
 
       const presignedUploads = await requestPresignedUploads(activeSession, localItems)
       await uploadLocalFilesToMinio(presignedUploads, filesByRelativePath)
-      const localPayload = serializeIngestionPayloadFromLocal(
-        localItems,
-        checksum,
-        presignedUploads.map((item) => item.objectKey),
-      )
+      const localPayload = serializeIngestionPayloadFromLocal(localItems, presignedUploads.map((item) => item.objectKey))
 
       const created = await submitIngestionJob(activeSession, localPayload)
       setJobs((current) => [created, ...current])
       clearLocalSelection()
-      setChecksum('')
       setStatusMessage(`Uploaded ${presignedUploads.length} file(s) and queued job ${created.jobId}.`)
     } catch (error) {
       if (error instanceof SessionExpiredError) {
@@ -377,57 +292,12 @@ function App() {
     }
   }
 
-  useEffect(() => {
-    if (!activeSession || import.meta.env.MODE === 'test') {
-      return
-    }
-
-    const controller = new AbortController()
-    let stopped = false
-
-    const run = async () => {
-      while (!stopped && !controller.signal.aborted) {
-        try {
-          await startIngestionProgressStream(
-            activeSession,
-            {
-              onEvent: mergeProgressEvent,
-              onStatus: setStatusMessage,
-            },
-            controller.signal,
-          )
-          if (controller.signal.aborted) {
-            break
-          }
-          await delay(400)
-        } catch (error) {
-          if (controller.signal.aborted) {
-            break
-          }
-          if (error instanceof SessionExpiredError) {
-            resetToLoggedOut('Session expired. Please log in again.', activeSession.tenantId)
-            break
-          }
-          setStatusMessage('Ingestion progress stream interrupted. Retrying...')
-          await delay(1500)
-        }
-      }
-    }
-
-    void run()
-
-    return () => {
-      stopped = true
-      controller.abort()
-    }
-  }, [activeSession, mergeProgressEvent, resetToLoggedOut])
-
   return (
     <main className="dashboard-root">
       <header className="hero">
-        <p className="eyebrow">Enterprise Go RAG</p>
+        <p className="eyebrow">Enterprise FineR</p>
         <h1>Ingestion Dashboard</h1>
-        <p className="subtitle">Login, upload to MinIO, and monitor ingestion lifecycle in real time.</p>
+        <p className="subtitle">Login, upload to MinIO, and monitor ingestion lifecycle on refresh.</p>
       </header>
 
       {authStatus !== 'authenticated' || !authSession ? (
@@ -481,10 +351,10 @@ function App() {
 
       {activeSession ? (
         <section className="card" data-testid="dashboard">
-          <h2>Tenant Workspace</h2>
-          <div className="field-grid">
-            <label>
-              Active Tenant
+          <div className="workspace-header">
+            <h2>{`${tenants.find((tenant) => tenant.tenantId === activeSession.tenantId)?.displayName ?? activeSession.tenantId} Workspace`}</h2>
+            <label className="tenant-switcher-inline">
+              <span className="sr-only">Active Tenant</span>
               <select
                 data-testid="tenant-switcher"
                 value={activeSession.tenantId}
@@ -497,14 +367,16 @@ function App() {
                 ))}
               </select>
             </label>
-            <label>
-              Vector Count
-              <input readOnly value={String(vectorStats?.vectorCount ?? 0)} />
-            </label>
-            <label>
-              Vector Storage
-              <input readOnly value={formatBytes(vectorStats?.storageBytes ?? 0)} />
-            </label>
+          </div>
+          <div className="stat-grid">
+            <article className="stat-card">
+              <p>Vector Count</p>
+              <strong>{String(vectorStats?.vectorCount ?? 0)}</strong>
+            </article>
+            <article className="stat-card">
+              <p>Vector Storage</p>
+              <strong>{formatBytes(vectorStats?.storageBytes ?? 0)}</strong>
+            </article>
           </div>
           <div className="row-actions">
             <button type="button" onClick={() => void handleRefresh()}>
@@ -521,19 +393,19 @@ function App() {
         <section className="layout-grid">
           <article className="card">
             <h2>Knowledge Base</h2>
-            <div className="field-grid">
-              <label>
-                Total Documents
-                <input readOnly value={String(kbSummary.documents)} />
-              </label>
-              <label>
-                Total Chunks
-                <input readOnly value={String(kbSummary.chunks)} />
-              </label>
-              <label>
-                Knowledge Bases
-                <input readOnly value={String(knowledgeBases.length)} />
-              </label>
+            <div className="stat-grid">
+              <article className="stat-card">
+                <p>Total Documents</p>
+                <strong>{String(kbSummary.documents)}</strong>
+              </article>
+              <article className="stat-card">
+                <p>Total Chunks</p>
+                <strong>{String(kbSummary.chunks)}</strong>
+              </article>
+              <article className="stat-card">
+                <p>Knowledge Bases</p>
+                <strong>{String(knowledgeBases.length)}</strong>
+              </article>
             </div>
             <div className="table-wrap">
               <table>
@@ -630,16 +502,6 @@ function App() {
                 </ul>
               </>
             )}
-
-            <label>
-              Checksum
-              <input
-                data-testid="checksum"
-                value={checksum}
-                onChange={(event) => setChecksum(event.target.value)}
-                placeholder="sha256..."
-              />
-            </label>
 
             <div className="row-actions">
               <button type="button" disabled={!canSubmit} onClick={() => void handleSubmitJob()}>

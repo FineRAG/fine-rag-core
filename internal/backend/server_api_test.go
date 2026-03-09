@@ -36,8 +36,14 @@ func newTestServer(t *testing.T) (*Server, sqlmock.Sqlmock, *vectorstub.Adapter)
 		AllowedOrigins:  []string{"http://localhost:14173"},
 		RateLimitPerMin: 1000,
 		UploadBaseURL:   "http://minio:9000",
+		MinIOEndpoint:   "http://minio:9000",
 		UploadBucket:    "finerag-ingestion",
-	}, db, nil, retrievalSvc)
+		MinIOAccessKey:  "minioadmin",
+		MinIOSecretKey:  "minioadmin123",
+		MinIORegion:     "us-east-1",
+		PresignTTL:      5 * time.Minute,
+		MaxObjectBytes:  20 * 1024 * 1024,
+	}, db, nil, retrievalSvc, adapter)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
@@ -146,7 +152,7 @@ func TestPresignUploadsWithTenantGuard(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
 	rr := requestJSON(t, h, http.MethodPost, "/api/v1/uploads/presign", map[string]any{
-		"files": []map[string]any{{"name": "a.txt", "relativePath": "docs/a.txt", "type": "text/plain"}},
+		"files": []map[string]any{{"name": "a.txt", "size": 12, "relativePath": "docs/a.txt", "type": "text/plain"}},
 	}, map[string]string{
 		"Authorization": "Bearer " + token,
 		"X-Tenant-ID":   "tenant-a",
@@ -157,6 +163,94 @@ func TestPresignUploadsWithTenantGuard(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "uploads") || !strings.Contains(rr.Body.String(), "tenant-a") {
 		t.Fatalf("expected uploads payload, got: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "expiresInSeconds") || !strings.Contains(rr.Body.String(), "300") {
+		t.Fatalf("expected 5 minute presign ttl in response, got: %s", rr.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations failed: %v", err)
+	}
+}
+
+func TestPresignRejectsObjectLargerThan20MB(t *testing.T) {
+	srv, mock, _ := newTestServer(t)
+	h := srv.Handler()
+
+	token, err := srv.signJWT(authClaims{Sub: "admin", UID: 10, Iat: time.Now().Unix(), Exp: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT EXISTS(SELECT 1 FROM user_tenants WHERE user_id = $1 AND tenant_id = $2)`)).
+		WithArgs(int64(10), "tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	rr := requestJSON(t, h, http.MethodPost, "/api/v1/uploads/presign", map[string]any{
+		"files": []map[string]any{{"name": "big.pdf", "size": 20*1024*1024 + 1, "relativePath": "big.pdf", "type": "application/pdf"}},
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+		"X-Tenant-ID":   "tenant-a",
+	})
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d, body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "object_too_large") {
+		t.Fatalf("expected object_too_large error, got: %s", rr.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations failed: %v", err)
+	}
+}
+
+func TestSubmitJobAllowsMissingChecksum(t *testing.T) {
+	srv, mock, _ := newTestServer(t)
+	h := srv.Handler()
+
+	token, err := srv.signJWT(authClaims{Sub: "admin", UID: 9, Iat: time.Now().Unix(), Exp: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT EXISTS(SELECT 1 FROM user_tenants WHERE user_id = $1 AND tenant_id = $2)`)).
+		WithArgs(int64(9), "tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO ingestion_jobs (job_id, tenant_id, source_uri, checksum, status, stage, processed_files, total_files, successful_files, failed_files, policy_code, policy_reason, source_mode, payload_json, chunk_count, payload_bytes, submitted_at, updated_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18)`)).
+		WithArgs(
+			sqlmock.AnyArg(),
+			"tenant-a",
+			"s3://tenant-a-ap-south-1/docs/new.txt",
+			sqlmock.AnyArg(),
+			"queued",
+			"cleanup",
+			0,
+			1,
+			0,
+			0,
+			"",
+			"",
+			"uri",
+			sqlmock.AnyArg(),
+			1,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	rr := requestJSON(t, h, http.MethodPost, "/api/v1/ingestion/jobs", map[string]any{
+		"sourceMode": "uri",
+		"sourceUri":  "s3://tenant-a-ap-south-1/docs/new.txt",
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+		"X-Tenant-ID":   "tenant-a",
+	})
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d, body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "jobId") {
+		t.Fatalf("expected job response, got: %s", rr.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations failed: %v", err)

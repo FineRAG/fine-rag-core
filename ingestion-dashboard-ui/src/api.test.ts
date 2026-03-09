@@ -8,12 +8,11 @@ import type { TenantSession } from './types'
 
 describe('api helpers', () => {
   it('serializes URI ingestion payload with trimmed fields', () => {
-    const payload = serializeIngestionPayloadFromUri(' s3://tenant-a/docs/file.pdf ', ' abc123 ')
+    const payload = serializeIngestionPayloadFromUri(' s3://tenant-a/docs/file.pdf ')
 
     expect(payload).toEqual({
       sourceMode: 'uri',
       sourceUri: 's3://tenant-a/docs/file.pdf',
-      checksum: 'abc123',
     })
   })
 
@@ -28,14 +27,12 @@ describe('api helpers', () => {
           relativePath: 'folder/doc.txt',
         },
       ],
-      ' c1 ',
       ['tenant-a/uploads/folder/doc.txt'],
     )
 
     expect(payload).toEqual({
       sourceMode: 'local',
       sourceUri: 'local://folder%2Fdoc.txt',
-      checksum: 'c1',
       objectKeys: ['tenant-a/uploads/folder/doc.txt'],
       localItems: [
         {

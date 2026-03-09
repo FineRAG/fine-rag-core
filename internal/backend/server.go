@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -23,6 +24,10 @@ import (
 	"enterprise-go-rag/internal/repository"
 	"enterprise-go-rag/internal/runtime"
 	"enterprise-go-rag/internal/services/retrieval"
+
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 type Config struct {
@@ -32,7 +37,13 @@ type Config struct {
 	AllowedOrigins  []string
 	RateLimitPerMin int
 	UploadBaseURL   string
+	MinIOEndpoint   string
 	UploadBucket    string
+	MinIOAccessKey  string
+	MinIOSecretKey  string
+	MinIORegion     string
+	PresignTTL      time.Duration
+	MaxObjectBytes  int64
 }
 
 type Server struct {
@@ -40,8 +51,11 @@ type Server struct {
 	db        *sql.DB
 	auditRepo contracts.AuditEventRepository
 	retrieval *retrieval.DeterministicRetrievalService
+	index     contracts.VectorIndex
 	origins   map[string]struct{}
 	limiter   *windowLimiter
+	presign   *s3.PresignClient
+	minio     *s3.Client
 }
 
 type authClaims struct {
@@ -54,6 +68,7 @@ type authClaims struct {
 type contextKey string
 
 const userIDKey contextKey = "uid"
+const requestIDKey contextKey = "request_id"
 
 func ConfigFromEnv() Config {
 	ttl := 8 * time.Hour
@@ -72,20 +87,41 @@ func ConfigFromEnv() Config {
 	if len(origins) == 0 {
 		origins = []string{"https://finer.shafeeq.dev", "https://dash-finer.shafeeq.dev", "http://localhost:14173", "http://localhost:14174"}
 	}
+	presignTTL := 5 * time.Minute
+	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_MINIO_PRESIGN_TTL")); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			presignTTL = parsed
+		}
+	}
+	maxObjectBytes := int64(20 * 1024 * 1024)
+	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_MINIO_MAX_OBJECT_BYTES")); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			maxObjectBytes = parsed
+		}
+	}
 	return Config{
 		Addr:            envOr("FINE_RAG_HTTP_ADDR", ":8080"),
-		JWTSecret:       strings.TrimSpace(os.Getenv("FINE_RAG_JWT_SECRET")),
+		JWTSecret:       envOrSecret("FINE_RAG_JWT_SECRET", ""),
 		TokenTTL:        ttl,
 		AllowedOrigins:  origins,
 		RateLimitPerMin: limit,
-		UploadBaseURL:   strings.TrimSpace(os.Getenv("FINE_RAG_MINIO_PUBLIC_BASE_URL")),
+		UploadBaseURL:   envOrSecret("FINE_RAG_MINIO_PUBLIC_BASE_URL", ""),
+		MinIOEndpoint:   envOrSecret("FINE_RAG_MINIO_ENDPOINT", "http://minio:9000"),
 		UploadBucket:    envOr("FINE_RAG_MINIO_BUCKET", "finerag-ingestion"),
+		MinIOAccessKey:  envOrSecret("FINE_RAG_MINIO_ACCESS_KEY", ""),
+		MinIOSecretKey:  envOrSecret("FINE_RAG_MINIO_SECRET_KEY", ""),
+		MinIORegion:     envOr("FINE_RAG_MINIO_REGION", "us-east-1"),
+		PresignTTL:      presignTTL,
+		MaxObjectBytes:  maxObjectBytes,
 	}
 }
 
-func NewServer(cfg Config, db *sql.DB, auditRepo contracts.AuditEventRepository, retrievalSvc *retrieval.DeterministicRetrievalService) (*Server, error) {
+func NewServer(cfg Config, db *sql.DB, auditRepo contracts.AuditEventRepository, retrievalSvc *retrieval.DeterministicRetrievalService, vectorIndex contracts.VectorIndex) (*Server, error) {
 	if strings.TrimSpace(cfg.JWTSecret) == "" {
 		return nil, errors.New("FINE_RAG_JWT_SECRET is required")
+	}
+	if strings.TrimSpace(cfg.MinIOAccessKey) == "" || strings.TrimSpace(cfg.MinIOSecretKey) == "" {
+		return nil, errors.New("FINE_RAG_MINIO_ACCESS_KEY and FINE_RAG_MINIO_SECRET_KEY are required")
 	}
 	origins := map[string]struct{}{}
 	for _, origin := range cfg.AllowedOrigins {
@@ -93,13 +129,39 @@ func NewServer(cfg Config, db *sql.DB, auditRepo contracts.AuditEventRepository,
 			origins[t] = struct{}{}
 		}
 	}
+	publicEndpoint := strings.TrimRight(cfg.UploadBaseURL, "/")
+	if publicEndpoint == "" {
+		publicEndpoint = "http://localhost:19000"
+	}
+	internalEndpoint := strings.TrimRight(cfg.MinIOEndpoint, "/")
+	if internalEndpoint == "" {
+		internalEndpoint = "http://minio:9000"
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+		awsconfig.WithRegion(cfg.MinIORegion),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.MinIOAccessKey, cfg.MinIOSecretKey, "")),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load aws config: %w", err)
+	}
+	presignClient := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.BaseEndpoint = &publicEndpoint
+		o.UsePathStyle = true
+	})
+	minioClient := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.BaseEndpoint = &internalEndpoint
+		o.UsePathStyle = true
+	})
 	return &Server{
 		cfg:       cfg,
 		db:        db,
 		auditRepo: auditRepo,
 		retrieval: retrievalSvc,
+		index:     vectorIndex,
 		origins:   origins,
 		limiter:   newWindowLimiter(cfg.RateLimitPerMin),
+		presign:   s3.NewPresignClient(presignClient),
+		minio:     minioClient,
 	}, nil
 }
 
@@ -120,7 +182,63 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/ingestion/jobs/{jobId}/retry", s.withAuth(s.withTenant(http.HandlerFunc(s.handleRetryJob))))
 	mux.Handle("POST /api/v1/search", s.withAuth(s.withTenant(http.HandlerFunc(s.handleSearch))))
 	mux.Handle("POST /api/v1/search/stream", s.withAuth(s.withTenant(http.HandlerFunc(s.handleSearchStream))))
-	return s.withCORS(mux)
+	return s.withAccessLog(s.withCORS(s.withRequestID(mux)))
+}
+
+func (s *Server) withRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		if requestID == "" {
+			requestID = strings.TrimSpace(r.Header.Get("X-Request-Id"))
+		}
+		if requestID == "" {
+			requestID = "req-" + randomString(12)
+		}
+		w.Header().Set("X-Request-ID", requestID)
+		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+type accessLogWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *accessLogWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *accessLogWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *accessLogWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += n
+	return n, err
+}
+
+func (s *Server) withAccessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		wrapped := &accessLogWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(wrapped, r)
+		requestID := strings.TrimSpace(wrapped.Header().Get("X-Request-ID"))
+		if requestID == "" {
+			requestID = requestIDFromContext(r.Context())
+		}
+		tenantID := strings.TrimSpace(r.Header.Get("X-Tenant-ID"))
+		log.Printf("request_id=%s method=%s path=%s status=%d bytes=%d duration_ms=%d tenant=%s remote=%s",
+			requestID, r.Method, r.URL.Path, wrapped.status, wrapped.bytes, time.Since(start).Milliseconds(), tenantID, r.RemoteAddr)
+	})
 }
 
 func (s *Server) withCORS(next http.Handler) http.Handler {
@@ -188,31 +306,34 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 	})
 }
 
-func BuildRuntimeDependencies() (*sql.DB, contracts.AuditEventRepository, *retrieval.DeterministicRetrievalService, error) {
+func BuildRuntimeDependencies() (*sql.DB, contracts.AuditEventRepository, contracts.VectorIndex, *retrieval.DeterministicRetrievalService, error) {
 	dbCfg := runtime.LoadDatabaseConfigFromEnv(os.LookupEnv)
 	dbCfg.Provider = "postgres"
 	db, err := runtime.OpenPostgresDB(context.Background(), nil, dbCfg)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	auditRepo := repository.NewPostgresAuditEventRepository(db, repository.PostgresConfig{})
 	vectorCfg := runtime.LoadVectorConfigFromEnv(os.LookupEnv)
-	_, searcher, _, err := runtime.BuildVectorAdapters(vectorCfg)
+	index, searcher, _, err := runtime.BuildVectorAdapters(vectorCfg)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	gatewayCfg := runtime.LoadGatewayConfigFromEnv(os.LookupEnv)
 	reranker, _, err := runtime.BuildGatewayReranker(gatewayCfg, func() int64 { return time.Now().UTC().UnixMilli() })
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return db, auditRepo, retrieval.NewDeterministicRetrievalService(searcher, reranker, retrieval.Config{}), nil
+	return db, auditRepo, index, retrieval.NewDeterministicRetrievalService(searcher, reranker, retrieval.Config{}), nil
 }
 
 func (s *Server) EnsureBootstrapData(ctx context.Context) error {
-	user := envOr("FINE_RAG_BOOTSTRAP_ADMIN_USERNAME", "admin")
-	pass := envOr("FINE_RAG_BOOTSTRAP_ADMIN_PASSWORD", "sk-1234")
-	apiKey := envOr("FINE_RAG_BOOTSTRAP_ADMIN_API_KEY", "sk-1234")
+	user := envOrSecret("FINE_RAG_BOOTSTRAP_ADMIN_USERNAME", "")
+	pass := envOrSecret("FINE_RAG_BOOTSTRAP_ADMIN_PASSWORD", "")
+	apiKey := envOrSecret("FINE_RAG_BOOTSTRAP_ADMIN_API_KEY", "")
+	if user == "" || pass == "" || apiKey == "" {
+		return errors.New("bootstrap admin secrets are required via *_FILE or env")
+	}
 	tenantID := envOr("FINE_RAG_BOOTSTRAP_TENANT_ID", "tenant-a")
 	tenantName := envOr("FINE_RAG_BOOTSTRAP_TENANT_NAME", "Tenant A")
 	var userID int64
@@ -297,6 +418,11 @@ func userIDFromContext(ctx context.Context) (int64, bool) {
 	return uid, ok
 }
 
+func requestIDFromContext(ctx context.Context) string {
+	value, _ := ctx.Value(requestIDKey).(string)
+	return strings.TrimSpace(value)
+}
+
 func decodeJSON(body io.ReadCloser, out any) error {
 	defer body.Close()
 	d := json.NewDecoder(io.LimitReader(body, 2<<20))
@@ -323,6 +449,20 @@ func randomString(n int) string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return base64.RawURLEncoding.EncodeToString(buf)[:n]
+}
+
+func envOrSecret(key string, fallback string) string {
+	if filePath := strings.TrimSpace(os.Getenv(key + "_FILE")); filePath != "" {
+		if raw, err := os.ReadFile(filePath); err == nil {
+			if value := strings.TrimSpace(string(raw)); value != "" {
+				return value
+			}
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func envOr(key string, fallback string) string {

@@ -17,7 +17,7 @@ import (
 func main() {
 	cfg := backend.ConfigFromEnv()
 
-	db, auditRepo, retrievalSvc, err := backend.BuildRuntimeDependencies()
+	db, auditRepo, vectorIndex, retrievalSvc, err := backend.BuildRuntimeDependencies()
 	if err != nil {
 		log.Fatalf("failed to initialize runtime dependencies: %v", err)
 	}
@@ -27,7 +27,7 @@ func main() {
 		log.Fatalf("failed to apply migrations: %v", err)
 	}
 
-	srv, err := backend.NewServer(cfg, db, auditRepo, retrievalSvc)
+	srv, err := backend.NewServer(cfg, db, auditRepo, retrievalSvc, vectorIndex)
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
 	}

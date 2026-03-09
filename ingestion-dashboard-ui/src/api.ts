@@ -137,17 +137,15 @@ export async function fetchVectorStats(session: TenantSession): Promise<VectorSt
   return (await response.json()) as VectorStats
 }
 
-export function serializeIngestionPayloadFromUri(sourceUri: string, checksum: string): IngestionPayload {
+export function serializeIngestionPayloadFromUri(sourceUri: string): IngestionPayload {
   return {
     sourceMode: 'uri',
     sourceUri: sourceUri.trim(),
-    checksum: checksum.trim(),
   }
 }
 
 export function serializeIngestionPayloadFromLocal(
   items: LocalItem[],
-  checksum: string,
   objectKeys: string[],
 ): IngestionPayload {
   const normalizedItems = items.map((item) => ({
@@ -164,7 +162,6 @@ export function serializeIngestionPayloadFromLocal(
   return {
     sourceMode: 'local',
     sourceUri: syntheticUri,
-    checksum: checksum.trim(),
     objectKeys,
     localItems: normalizedItems,
   }
