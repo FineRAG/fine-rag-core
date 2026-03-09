@@ -10,6 +10,8 @@ import (
 
 	"enterprise-go-rag/internal/backend"
 	"enterprise-go-rag/internal/repository"
+
+	_ "github.com/lib/pq"
 )
 
 func main() {
