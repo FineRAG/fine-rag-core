@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -160,6 +161,142 @@ type IngestionJob struct {
 	Checksum       string
 	PolicyDecision IngestionStatus
 	CreatedAt      time.Time
+}
+
+type QueueMessage struct {
+	MessageID      string
+	Job            IngestionJob
+	IdempotencyKey string
+	Attempt        int
+	EnqueuedAt     time.Time
+}
+
+func (m QueueMessage) Validate() error {
+	if m.MessageID == "" {
+		return errors.New("message_id is required")
+	}
+	if err := m.Job.Validate(); err != nil {
+		return fmt.Errorf("job invalid: %w", err)
+	}
+	if m.Attempt < 0 {
+		return errors.New("attempt must be >= 0")
+	}
+	if m.EnqueuedAt.IsZero() {
+		return errors.New("enqueued_at is required")
+	}
+	return nil
+}
+
+type IngestionQueueProducer interface {
+	Enqueue(ctx context.Context, message QueueMessage) error
+}
+
+type IngestionQueueConsumer interface {
+	Dequeue(ctx context.Context) (QueueMessage, error)
+}
+
+type DeadLetterQueue interface {
+	Publish(ctx context.Context, message QueueMessage, reason string) error
+}
+
+type ArtifactBlobStore interface {
+	Get(ctx context.Context, tenantID TenantID, sourceURI string) ([]byte, error)
+}
+
+type EmbeddingProvider interface {
+	Embed(ctx context.Context, tenantID TenantID, chunks []string) ([][]float32, error)
+}
+
+type VectorRecord struct {
+	RecordID   string
+	TenantID   TenantID
+	JobID      string
+	ChunkText  string
+	Embedding  []float32
+	Metadata   map[string]string
+	IndexedAt  time.Time
+	SourceURI  string
+	Checksum   string
+	RetryCount int
+}
+
+func (r VectorRecord) Validate() error {
+	if r.RecordID == "" {
+		return errors.New("record_id is required")
+	}
+	if err := r.TenantID.Validate(); err != nil {
+		return err
+	}
+	if r.JobID == "" {
+		return errors.New("job_id is required")
+	}
+	if strings.TrimSpace(r.ChunkText) == "" {
+		return errors.New("chunk_text is required")
+	}
+	if len(r.Embedding) == 0 {
+		return errors.New("embedding is required")
+	}
+	if r.IndexedAt.IsZero() {
+		return errors.New("indexed_at is required")
+	}
+	if r.SourceURI == "" {
+		return errors.New("source_uri is required")
+	}
+	if r.Checksum == "" {
+		return errors.New("checksum is required")
+	}
+	if r.RetryCount < 0 {
+		return errors.New("retry_count must be >= 0")
+	}
+	return nil
+}
+
+type VectorIndex interface {
+	Upsert(ctx context.Context, records []VectorRecord) error
+}
+
+type IdempotencyStore interface {
+	Exists(ctx context.Context, key string) (bool, error)
+	Save(ctx context.Context, key string, ttl time.Duration) error
+}
+
+type RetentionClass string
+
+const (
+	RetentionClassRawBlob    RetentionClass = "raw_blob"
+	RetentionClassChunk      RetentionClass = "chunk"
+	RetentionClassAuditEvent RetentionClass = "audit_event"
+)
+
+type RetentionRecord struct {
+	TenantID       TenantID
+	JobID          string
+	Class          RetentionClass
+	Resource       string
+	RetentionUntil time.Time
+}
+
+func (r RetentionRecord) Validate() error {
+	if err := r.TenantID.Validate(); err != nil {
+		return err
+	}
+	if r.JobID == "" {
+		return errors.New("job_id is required")
+	}
+	if r.Class == "" {
+		return errors.New("retention class is required")
+	}
+	if strings.TrimSpace(r.Resource) == "" {
+		return errors.New("resource is required")
+	}
+	if r.RetentionUntil.IsZero() {
+		return errors.New("retention_until is required")
+	}
+	return nil
+}
+
+type RetentionPolicyHook interface {
+	Apply(ctx context.Context, record RetentionRecord) error
 }
 
 type PayloadClassification string
