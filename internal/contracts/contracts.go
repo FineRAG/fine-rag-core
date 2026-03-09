@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -425,12 +426,23 @@ type RetrievalDocument struct {
 	TenantID   TenantID
 	Content    string
 	Score      float64
+	SourceURI  string
+}
+
+type RetrievalTrace struct {
+	TenantFilterApplied bool
+	CandidateCount      int
+	RerankApplied       bool
+	FallbackReason      string
+	DurationMillis      int64
 }
 
 type RetrievalResult struct {
 	TenantID  TenantID
 	RequestID string
 	Documents []RetrievalDocument
+	Citations []string
+	Trace     RetrievalTrace
 }
 
 func (r RetrievalResult) Validate() error {
@@ -439,6 +451,17 @@ func (r RetrievalResult) Validate() error {
 	}
 	if r.RequestID == "" {
 		return errors.New("request_id is required")
+	}
+	for _, doc := range r.Documents {
+		if doc.DocumentID == "" {
+			return errors.New("document_id is required")
+		}
+		if err := doc.TenantID.Validate(); err != nil {
+			return err
+		}
+		if doc.TenantID != r.TenantID {
+			return errors.New("document tenant mismatch")
+		}
 	}
 	return nil
 }
@@ -455,6 +478,18 @@ type RerankRequest struct {
 	QueryText  string
 	Candidates []RerankCandidate
 	TopN       int
+}
+
+func (r RerankRequest) TopCandidates() []RerankCandidate {
+	copyCandidates := make([]RerankCandidate, len(r.Candidates))
+	copy(copyCandidates, r.Candidates)
+	sort.SliceStable(copyCandidates, func(i, j int) bool {
+		return copyCandidates[i].Score > copyCandidates[j].Score
+	})
+	if r.TopN <= 0 || r.TopN >= len(copyCandidates) {
+		return copyCandidates
+	}
+	return copyCandidates[:r.TopN]
 }
 
 func (r RerankRequest) Validate() error {
@@ -540,6 +575,14 @@ func (d RateLimitDecision) Validate() error {
 
 type AuditSink interface {
 	Write(ctx context.Context, event AuditEvent) error
+}
+
+type VectorSearcher interface {
+	Search(ctx context.Context, tenantID TenantID, queryText string, topK int) ([]RetrievalDocument, error)
+}
+
+type Reranker interface {
+	Rerank(ctx context.Context, req RerankRequest) ([]RerankCandidate, error)
 }
 
 func WrapValidationErr(contract string, err error) error {
