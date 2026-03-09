@@ -76,6 +76,16 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
 
+  ingestion-dashboard-ui:
+    build:
+      context: ./ingestion-dashboard-ui
+    container_name: finerag-ingestion-dashboard-ui
+    restart: unless-stopped
+    ports:
+      - "14173:80"
+    depends_on:
+      - postgres
+
 volumes:
   postgres_data:
   minio_data:

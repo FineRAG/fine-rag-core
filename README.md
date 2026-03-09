@@ -151,6 +151,35 @@ go test ./...
 go test ./test/...
 ```
 
+## Ingestion Dashboard UI (E4-T1)
+
+The repository now includes `ingestion-dashboard-ui/` (React + Vite) for tenant session bootstrap, ingestion submission/status, and API-key create/revoke controls.
+
+1. Local development:
+
+```bash
+cd ingestion-dashboard-ui
+npm ci
+VITE_INGESTION_API_BASE_URL=http://localhost:8080 npm run dev
+```
+
+2. Frontend quality gates:
+
+```bash
+cd ingestion-dashboard-ui
+npm run lint
+npm run test
+npm run build
+```
+
+3. Containerized serving path:
+
+```bash
+docker compose up -d ingestion-dashboard-ui
+```
+
+The UI is served at `http://localhost:14173` when the compose service is running.
+
 Validation is OK when:
 
 - All commands exit with code `0`.
