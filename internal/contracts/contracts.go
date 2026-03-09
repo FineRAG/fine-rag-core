@@ -162,6 +162,88 @@ type IngestionJob struct {
 	CreatedAt      time.Time
 }
 
+type PayloadClassification string
+
+const (
+	PayloadClassValid          PayloadClassification = "valid"
+	PayloadClassInvalidPayload PayloadClassification = "invalid_payload"
+	PayloadClassInvalidTenant  PayloadClassification = "invalid_tenant"
+	PayloadClassInvalidSource  PayloadClassification = "invalid_source"
+)
+
+type IngestionMetadata struct {
+	TenantID       TenantID
+	ChecksumSHA256 string
+	SourceURI      string
+	LifecycleClass string
+	CapturedAt     time.Time
+}
+
+func (m IngestionMetadata) Validate() error {
+	if err := m.TenantID.Validate(); err != nil {
+		return err
+	}
+	if m.ChecksumSHA256 == "" {
+		return errors.New("checksum_sha256 is required")
+	}
+	if m.SourceURI == "" {
+		return errors.New("source_uri is required")
+	}
+	if m.LifecycleClass == "" {
+		return errors.New("lifecycle_class is required")
+	}
+	if m.CapturedAt.IsZero() {
+		return errors.New("captured_at is required")
+	}
+	return nil
+}
+
+type IngestionProfile struct {
+	Metadata       IngestionMetadata
+	PayloadBytes   int
+	ContentType    string
+	LineCount      int
+	WordCount      int
+	Classification PayloadClassification
+	ErrorReason    string
+}
+
+func (p IngestionProfile) Validate() error {
+	if err := p.Metadata.Validate(); err != nil {
+		return err
+	}
+	if p.PayloadBytes < 0 {
+		return errors.New("payload_bytes must be >= 0")
+	}
+	if p.Classification == "" {
+		return errors.New("classification is required")
+	}
+	if p.Classification != PayloadClassValid && p.ErrorReason == "" {
+		return errors.New("error_reason is required for invalid classifications")
+	}
+	return nil
+}
+
+type PolicyEngineInput struct {
+	TenantID       TenantID
+	ChecksumSHA256 string
+	SourceURI      string
+	LifecycleClass string
+	Classification PayloadClassification
+	ErrorReason    string
+}
+
+func (p IngestionProfile) ToPolicyEngineInput() PolicyEngineInput {
+	return PolicyEngineInput{
+		TenantID:       p.Metadata.TenantID,
+		ChecksumSHA256: p.Metadata.ChecksumSHA256,
+		SourceURI:      p.Metadata.SourceURI,
+		LifecycleClass: p.Metadata.LifecycleClass,
+		Classification: p.Classification,
+		ErrorReason:    p.ErrorReason,
+	}
+}
+
 func (j IngestionJob) Validate() error {
 	if err := j.TenantID.Validate(); err != nil {
 		return err
