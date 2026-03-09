@@ -3,10 +3,16 @@ package contracts_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	goruntime "runtime"
+	"strings"
 	"testing"
 	"time"
 
 	contracts "enterprise-go-rag/internal/contracts"
+	"enterprise-go-rag/internal/runtime"
+	"enterprise-go-rag/internal/services/retrieval"
 )
 
 type stubAuthorizer struct{}
@@ -137,5 +143,65 @@ func TestIsolationEnsureTenantMatch(t *testing.T) {
 
 	if err := contracts.EnsureTenantMatch(ctx, "tenant-b"); err == nil {
 		t.Fatal("expected tenant mismatch error")
+	}
+}
+
+func TestContractProviderSwitchIsConfigOnly(t *testing.T) {
+	now := time.Date(2026, 3, 9, 12, 30, 0, 0, time.UTC)
+	buildRecords := func() []contracts.VectorRecord {
+		return []contracts.VectorRecord{{
+			RecordID:  "doc-1",
+			TenantID:  "tenant-a",
+			JobID:     "job-1",
+			ChunkText: "onboarding policy",
+			Embedding: []float32{1},
+			IndexedAt: now,
+			SourceURI: "s3://tenant-a/doc-1.txt",
+			Checksum:  "sum-1",
+		}}
+	}
+	query := contracts.RetrievalQuery{TenantID: "tenant-a", RequestID: "req-1", Text: "onboarding", TopK: 1}
+	metadata := contracts.RequestMetadata{TenantID: "tenant-a", RequestID: "req-1"}
+
+	stubIdx, stubSearcher, _, err := runtime.BuildVectorAdapters(runtime.VectorConfig{Provider: "stub"})
+	if err != nil {
+		t.Fatalf("build stub adapter: %v", err)
+	}
+	if err := stubIdx.Upsert(t.Context(), buildRecords()); err != nil {
+		t.Fatalf("stub upsert: %v", err)
+	}
+	stubSvc := retrieval.NewDeterministicRetrievalService(stubSearcher, nil, retrieval.Config{Clock: time.Now})
+	if _, err := stubSvc.Search(t.Context(), metadata, query); err != nil {
+		t.Fatalf("stub provider search failed: %v", err)
+	}
+
+	milvusCfg := runtime.VectorConfig{Provider: "milvus", Endpoint: "https://milvus.example.internal", Database: "db", Collection: "vectors", TLS: true}
+	milvusIdx, milvusSearcher, _, err := runtime.BuildVectorAdapters(milvusCfg)
+	if err != nil {
+		t.Fatalf("build milvus adapter: %v", err)
+	}
+	if err := milvusIdx.Upsert(t.Context(), buildRecords()); err != nil {
+		t.Fatalf("milvus upsert: %v", err)
+	}
+	milvusSvc := retrieval.NewDeterministicRetrievalService(milvusSearcher, nil, retrieval.Config{Clock: time.Now})
+	if _, err := milvusSvc.Search(t.Context(), metadata, query); err != nil {
+		t.Fatalf("milvus provider search failed: %v", err)
+	}
+}
+
+func TestContractRetrievalServiceHasNoProviderBranching(t *testing.T) {
+	_, thisFile, _, ok := goruntime.Caller(0)
+	if !ok {
+		t.Fatal("failed to resolve current file path")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	retrievalFile := filepath.Join(repoRoot, "internal", "services", "retrieval", "service.go")
+	content, err := os.ReadFile(retrievalFile)
+	if err != nil {
+		t.Fatalf("read retrieval service file: %v", err)
+	}
+	text := strings.ToLower(string(content))
+	if strings.Contains(text, "milvus") || strings.Contains(text, "portkey") || strings.Contains(text, "finerag_vector_provider") {
+		t.Fatalf("retrieval service should remain provider-agnostic; found provider-specific branching in %s", retrievalFile)
 	}
 }

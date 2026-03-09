@@ -116,6 +116,25 @@ func (s *DeterministicRetrievalService) Search(ctx context.Context, metadata con
 			DurationMillis:      s.clock().Sub(start).Milliseconds(),
 		},
 	}
+	if tracer, ok := s.searcher.(contracts.VectorTraceProvider); ok {
+		vt := tracer.LastVectorTrace()
+		result.Trace.VectorProvider = vt.Provider
+		result.Trace.VectorStatus = vt.Status
+		result.Trace.VectorLatencyMillis = vt.LatencyMillis
+	}
+	if tracer, ok := s.reranker.(contracts.GatewayTraceProvider); ok {
+		gt := tracer.LastGatewayTrace()
+		result.Trace.GatewayProvider = gt.Provider
+		result.Trace.GatewayStatus = gt.Status
+		result.Trace.GatewayModel = gt.Model
+		result.Trace.GatewayLatencyMillis = gt.LatencyMillis
+		result.Trace.GatewayTokenInput = gt.TokenInput
+		result.Trace.GatewayTokenOutput = gt.TokenOutput
+		result.Trace.GatewayTokenTotal = gt.TokenTotal
+		if result.Trace.FallbackReason == "" {
+			result.Trace.FallbackReason = gt.FallbackReason
+		}
+	}
 	if err := result.Validate(); err != nil {
 		return contracts.RetrievalResult{}, contracts.WrapValidationErr("retrieval_result", err)
 	}

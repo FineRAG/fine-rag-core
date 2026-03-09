@@ -454,11 +454,21 @@ type RetrievalDocument struct {
 }
 
 type RetrievalTrace struct {
-	TenantFilterApplied bool
-	CandidateCount      int
-	RerankApplied       bool
-	FallbackReason      string
-	DurationMillis      int64
+	TenantFilterApplied  bool
+	CandidateCount       int
+	RerankApplied        bool
+	FallbackReason       string
+	DurationMillis       int64
+	VectorProvider       string
+	VectorStatus         string
+	VectorLatencyMillis  int64
+	GatewayProvider      string
+	GatewayStatus        string
+	GatewayModel         string
+	GatewayLatencyMillis int64
+	GatewayTokenInput    int
+	GatewayTokenOutput   int
+	GatewayTokenTotal    int
 }
 
 type RetrievalResult struct {
@@ -622,6 +632,54 @@ type VectorSearcher interface {
 
 type Reranker interface {
 	Rerank(ctx context.Context, req RerankRequest) ([]RerankCandidate, error)
+}
+
+type ProviderErrorCategory string
+
+const (
+	ProviderErrValidation   ProviderErrorCategory = "validation"
+	ProviderErrUnavailable  ProviderErrorCategory = "unavailable"
+	ProviderErrTimeout      ProviderErrorCategory = "timeout"
+	ProviderErrUnauthorized ProviderErrorCategory = "unauthorized"
+	ProviderErrInternal     ProviderErrorCategory = "internal"
+)
+
+type ProviderError struct {
+	Category ProviderErrorCategory
+	Provider string
+	Op       string
+	Err      error
+}
+
+func (e ProviderError) Error() string {
+	return fmt.Sprintf("%s provider error (%s): %s", e.Provider, e.Category, e.Op)
+}
+
+func (e ProviderError) Unwrap() error { return e.Err }
+
+type VectorCallTrace struct {
+	Provider      string
+	Status        string
+	LatencyMillis int64
+}
+
+type GatewayCallTrace struct {
+	Provider       string
+	Model          string
+	LatencyMillis  int64
+	TokenInput     int
+	TokenOutput    int
+	TokenTotal     int
+	Status         string
+	FallbackReason string
+}
+
+type VectorTraceProvider interface {
+	LastVectorTrace() VectorCallTrace
+}
+
+type GatewayTraceProvider interface {
+	LastGatewayTrace() GatewayCallTrace
 }
 
 func WrapValidationErr(contract string, err error) error {

@@ -113,14 +113,18 @@ Enterprise Go RAG starts with governance and security controls as core capabilit
 
 Core runtime and platform components:
 
-- API gateway for auth, rate limiting, tenant context, routing, and response shaping.
-- Ingestion orchestrator and worker pool for async document processing.
-- Retrieval service for embedding, tenant-filtered search, reranking, and citations.
-- Governance module/service for policy and compliance decisions.
-- PostgreSQL for tenant registry, metadata, and audit records.
-- MinIO for blob storage.
-- Milvus for vector search.
-- Prometheus + Grafana + OpenTelemetry for observability.
+- Domain services and contracts for ingestion, governance, retrieval, and runtime wiring.
+- PostgreSQL adapter layer for tenant registry, metadata, and audit repositories.
+- Queue provider layer with `memory` and `sqs` modes (including DLQ publish path and local fallback).
+- Migration bootstrap module and SQL migration set under `migrations/`.
+- Frontend apps: `ingestion-dashboard-ui` and `search-query-ui`.
+- Docker compose stack for local/EC2 infrastructure services (PostgreSQL, MinIO, Milvus, Prometheus, Grafana, UI containers).
+
+Implementation note:
+
+- This repository currently provides service modules, adapters, tests, UI clients, and deployment tooling.
+- A runnable Go API server binary/router implementation is not yet present in the repository root.
+- UI apps call expected API routes; backend API implementation is tracked as follow-on execution work.
 
 ## Observability and Cost Accountability
 
@@ -135,9 +139,21 @@ The architecture includes enterprise telemetry priorities:
 ## Developer and Delivery Model
 
 - Local development and AI-assisted authoring in VS Code.
-- Build/deploy path designed for EC2 container rollout.
+- Build/deploy path designed for EC2 container rollout via script automation.
 - Structured quality gates across unit, integration, performance, and security checks.
 - Clear phase plan for v1 and v1.1 evolution.
+
+## Execution Scripts
+
+Key scripts in `scripts/` and when to use them:
+
+- `scripts/securitygov_review.sh`: run security/governance-focused verification tests.
+- `scripts/deploy_sync_health.sh`: sync workspace to EC2, deploy compose stack, and run health checks.
+- `scripts/check_stack.sh`: run remote stack and dependency health checks only.
+- `scripts/migration_bootstrap.sh`: validate DB provider/migration preconditions and migration test path.
+- `scripts/deployment_workflow.sh`: branch/push/merge/PR/deploy helper workflow.
+- `scripts/deploy_ec2.sh`: compatibility wrapper for `deployment_workflow.sh deploy-ec2`.
+- `scripts/task_orchestrate.sh`: end-to-end task delivery orchestrator (security, git flow, deploy, health).
 
 ## Run and Validate Tests
 
@@ -164,9 +180,21 @@ go test ./...
 go test ./test/...
 ```
 
+4. Run security/governance review gates:
+
+```bash
+scripts/securitygov_review.sh 'PolicyGate|Governance|PII|Residency|Repository|Queue|SQS|Migration'
+```
+
 ## Ingestion Dashboard UI (E4-T1)
 
 The repository now includes `ingestion-dashboard-ui/` (React + Vite) for tenant session bootstrap, ingestion submission/status, and API-key create/revoke controls.
+
+Authentication and session model in current UI:
+
+- There is no username/password login screen today.
+- Session is started manually with `Tenant ID`, `Request ID`, and `API Key`.
+- API key creation and revocation controls are currently present in the dashboard UI.
 
 1. Local development:
 
@@ -221,6 +249,17 @@ docker compose up -d search-query-ui
 ```
 
 The UI is served at `http://localhost:14174` when the compose service is running.
+
+How to query and view result with current implementation:
+
+1. Open `http://localhost:14174`.
+2. Enter `Tenant ID`, `Request ID`, and `API Key`, then click `Start Session`.
+3. Enter question text and click `Stream Answer`.
+4. Read streamed output in `Streaming Answer`, with citations in `Citations` and metadata in `Trace Metadata`.
+
+Expected backend route used by UI client:
+
+- `POST /api/v1/search/stream` (SSE frame parsing in the UI client).
 
 Validation is OK when:
 
