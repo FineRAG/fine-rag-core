@@ -1,15 +1,96 @@
-import type { Session, StreamEvent } from './types'
+import type { AuthSession, StreamEvent, TenantRecord, TenantSession } from './types'
 
 const defaultBaseUrl = 'http://localhost:8080'
+
+export class SessionExpiredError extends Error {
+  constructor(message = 'session expired') {
+    super(message)
+    this.name = 'SessionExpiredError'
+  }
+}
 
 export function getApiBaseUrl(): string {
   const fromEnv = import.meta.env.VITE_SEARCH_API_BASE_URL
   return fromEnv && String(fromEnv).trim() ? String(fromEnv).trim() : defaultBaseUrl
 }
 
-export function buildTenantHeaders(session: Session): HeadersInit {
+function assertAuthSession(session: AuthSession | null | undefined): asserts session is AuthSession {
+  if (!session?.token || !session.requestId) {
+    throw new Error('authenticated session is required')
+  }
+}
+
+function assertTenantSession(session: TenantSession | null | undefined): asserts session is TenantSession {
+  assertAuthSession(session)
+  if (!session.tenantId) {
+    throw new Error('tenant session is required')
+  }
+}
+
+export function createRequestId(): string {
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+export async function login(input: {
+  username: string
+  apiKey: string
+  requestId: string
+}): Promise<AuthSession> {
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Request-ID': input.requestId.trim() || createRequestId(),
+    },
+    body: JSON.stringify({
+      username: input.username.trim(),
+      apiKey: input.apiKey.trim(),
+    }),
+  })
+
+  if (response.status === 401 || response.status === 403) {
+    throw new SessionExpiredError('authentication rejected')
+  }
+  if (!response.ok) {
+    throw new Error(`failed to login: ${response.status}`)
+  }
+
+  const payload = (await response.json()) as { token?: string }
+  if (!payload.token) {
+    throw new Error('failed to login: missing token')
+  }
+
   return {
-    Authorization: `Bearer ${session.apiKey}`,
+    username: input.username.trim(),
+    token: payload.token,
+    requestId: input.requestId.trim() || createRequestId(),
+  }
+}
+
+export async function listTenants(session: AuthSession): Promise<TenantRecord[]> {
+  assertAuthSession(session)
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/tenants`, {
+    headers: {
+      Authorization: `Bearer ${session.token}`,
+      'Content-Type': 'application/json',
+      'X-Request-ID': session.requestId,
+    },
+  })
+
+  if (response.status === 401 || response.status === 403) {
+    throw new SessionExpiredError('session rejected while listing tenants')
+  }
+  if (!response.ok) {
+    throw new Error(`failed to list tenants: ${response.status}`)
+  }
+
+  return (await response.json()) as TenantRecord[]
+}
+
+export function buildTenantHeaders(session: TenantSession): HeadersInit {
+  assertTenantSession(session)
+  return {
+    Authorization: `Bearer ${session.token}`,
     'Content-Type': 'application/json',
     'X-Request-ID': session.requestId,
     'X-Tenant-ID': session.tenantId,
@@ -22,17 +103,22 @@ type StreamCallbacks = {
 }
 
 export async function startSearchStream(
-  session: Session,
+  session: TenantSession,
   queryText: string,
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
 ): Promise<void> {
+  assertTenantSession(session)
+
   const response = await fetch(`${getApiBaseUrl()}/api/v1/search/stream`, {
     method: 'POST',
     headers: buildTenantHeaders(session),
     body: JSON.stringify({ queryText: queryText.trim() }),
     signal,
   })
+  if (response.status === 401 || response.status === 403) {
+    throw new SessionExpiredError('query session expired')
+  }
   if (!response.ok) {
     throw new Error(`failed to start search stream: ${response.status}`)
   }

@@ -1,5 +1,5 @@
-import { buildTenantHeaders, getApiBaseUrl } from './api'
-import type { Session } from './types'
+import { buildTenantHeaders, createRequestId, getApiBaseUrl } from './api'
+import type { TenantSession } from './types'
 
 describe('api helpers', () => {
   it('defaults base URL when search env variable is missing', () => {
@@ -7,10 +7,11 @@ describe('api helpers', () => {
   })
 
   it('adds tenant context headers for all scoped requests', () => {
-    const session: Session = {
+    const session: TenantSession = {
+      username: 'alice',
+      token: 'secret-key',
       tenantId: 'tenant-a',
       requestId: 'req-101',
-      apiKey: 'secret-key',
     }
 
     expect(buildTenantHeaders(session)).toEqual({
@@ -19,5 +20,9 @@ describe('api helpers', () => {
       'X-Request-ID': 'req-101',
       'X-Tenant-ID': 'tenant-a',
     })
+  })
+
+  it('creates deterministic request id shape', () => {
+    expect(createRequestId()).toContain('req-')
   })
 })

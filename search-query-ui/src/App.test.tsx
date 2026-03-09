@@ -13,25 +13,36 @@ function streamResponse(body: string): Response {
 }
 
 describe('search query UI integration flow', () => {
-  it('boots session, streams answer, and renders citations/trace', async () => {
+  it('blocks workspace before login and resolves tenant before query stream', async () => {
     const fetchMock = vi.fn()
-    fetchMock.mockResolvedValueOnce(
-      streamResponse(
-        'data: {"type":"token","token":"Hello "}\n\n' +
-          'data: {"type":"token","token":"tenant"}\n\n' +
-          'data: {"type":"citation","citation":{"id":"c1","title":"Doc 1","uri":"s3://tenant-a/docs/1.txt"}}\n\n' +
-          'data: {"type":"done","trace":{"requestId":"req-1","ttftMs":120}}\n\n',
-      ),
-    )
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: 'token-a' }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{ tenantId: 'tenant-a', displayName: 'Tenant A' }],
+      })
+      .mockResolvedValueOnce(
+        streamResponse(
+          'data: {"type":"token","token":"Hello "}\n\n' +
+            'data: {"type":"token","token":"tenant"}\n\n' +
+            'data: {"type":"citation","citation":{"id":"c1","title":"Doc 1","uri":"s3://tenant-a/docs/1.txt"}}\n\n' +
+            'data: {"type":"done","trace":{"requestId":"req-1","ttftMs":120}}\n\n',
+        ),
+      )
 
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
 
-    fireEvent.change(screen.getByTestId('tenant-id'), { target: { value: 'tenant-a' } })
+    expect(screen.getByTestId('login-gate')).toBeInTheDocument()
+    expect(screen.queryByTestId('query-workspace')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByTestId('username'), { target: { value: 'alice' } })
     fireEvent.change(screen.getByTestId('request-id'), { target: { value: 'req-1' } })
     fireEvent.change(screen.getByTestId('api-key'), { target: { value: 'k-123' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Start Session' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+
+    await screen.findByTestId('query-workspace')
 
     fireEvent.change(screen.getByTestId('query-text'), { target: { value: 'What is onboarding?' } })
     fireEvent.click(screen.getByRole('button', { name: 'Stream Answer' }))
@@ -42,26 +53,38 @@ describe('search query UI integration flow', () => {
     expect(screen.getByText('Doc 1')).toBeInTheDocument()
     expect(screen.getByTestId('trace-panel').textContent).toContain('ttftMs')
 
-    const streamCall = fetchMock.mock.calls[0]
+    const streamCall = fetchMock.mock.calls[2]
     expect(streamCall[0]).toContain('/api/v1/search/stream')
     expect(streamCall[1].method).toBe('POST')
     expect(streamCall[1].headers['X-Tenant-ID']).toBe('tenant-a')
+    expect(streamCall[1].headers.Authorization).toBe('Bearer token-a')
   })
 
-  it('shows retry state when stream fails', async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false, status: 503 })
+  it('resets session to login gate when stream receives 401', async () => {
+    const fetchMock = vi.fn()
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: 'token-a' }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{ tenantId: 'tenant-a', displayName: 'Tenant A' }],
+      })
+      .mockResolvedValueOnce({ ok: false, status: 401 })
+
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
 
-    fireEvent.change(screen.getByTestId('tenant-id'), { target: { value: 'tenant-a' } })
+    fireEvent.change(screen.getByTestId('username'), { target: { value: 'alice' } })
     fireEvent.change(screen.getByTestId('request-id'), { target: { value: 'req-2' } })
     fireEvent.change(screen.getByTestId('api-key'), { target: { value: 'k-999' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Start Session' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+
+    await screen.findByTestId('query-workspace')
 
     fireEvent.change(screen.getByTestId('query-text'), { target: { value: 'retry me' } })
     fireEvent.click(screen.getByRole('button', { name: 'Stream Answer' }))
 
-    await screen.findByText('Streaming interrupted. Retry is available.')
+    await screen.findByText('Session expired. Please log in again.')
+    expect(screen.getByTestId('login-gate')).toBeInTheDocument()
   })
 })

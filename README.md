@@ -89,6 +89,29 @@ curl -X POST https://api.finer.io/v1/search \
 
 ```
 
+### 5. One-Command Remote Stack + Local UI Tunnel
+
+Use the helper script to deploy/sync the full stack to EC2 and expose both UIs locally via SSH tunnel.
+
+```bash
+./run_stack_with_tunnel.sh
+```
+
+Then open:
+
+- Ingestion dashboard: `http://localhost:14173`
+- Search query UI: `http://localhost:14174`
+
+Useful variants:
+
+```bash
+# Tunnel only (no redeploy)
+./run_stack_with_tunnel.sh --skip-deploy
+
+# Custom host/key/path
+./run_stack_with_tunnel.sh --user-host ubuntu@<ec2-host> --ssh-key ~/.ssh/<key>.pem --remote-path /home/ubuntu/projects/finerag
+```
+
 ---
 
 ## 📈 Compliance & Security

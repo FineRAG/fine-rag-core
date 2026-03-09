@@ -1,110 +1,100 @@
-# 🚀 FineR (Fine-RAG)
+# Distilled Requirements - Go-RAG
 
-### *Fine-tuned Intelligence. Industrial-Strength Reliability.*
+Date: 2026-03-08
+Status: Draft for Review (AnalyzerAgent)
+Source: User clarifications + initial specification
 
-**FineR** is the definitive, high-velocity RAG framework engineered in Go for the modern enterprise. While others are still debugging Python scripts, **FineR** is already serving high-accuracy, governed knowledge at scale.
+## 1. Goals
 
-By treating data as a high-value asset rather than a raw dump, FineR eliminates the "Garbage In, Garbage Out" (GIGO) cycle with a robust, governed knowledge supply chain.
+* Build an enterprise-grade, multi-tenant Go (Golang) RAG platform.
+* Enforce governed ingestion to avoid low-quality/unsafe knowledge entering retrieval.
+* Optimize retrieval speed and accuracy under high traffic.
+* Keep authoring and AI code generation on local machine; deploy/build on AWS EC2 via rsync pipeline.
 
----
+## 2. Scope
 
-## 💎 The FineR Advantage
+### In scope (Milestone 1)
 
-### ⚡ **Elite Performance & Extreme Throughput**
+* Task 1: Core contracts and project skeleton.
+* Task 2: Multi-tenant context and middleware.
+* Task 3: Data profiler and quality gatekeeper.
+* Task 4: Multi-modal blob handler.
 
-Built on the Go concurrency model, FineR is designed to handle enterprise traffic without breaking a sweat.
+### Deferred
 
-* **High Throughput:** Engineered for **300+ Steady RPS** with a burst ceiling of **600 RPS**.
-* **Sub-Second Latency:** Achieve **p95 retrieval in <800ms**.
-* **Operational Efficiency:** Drastically lower your TCO (Total Cost of Ownership) compared to resource-heavy Python frameworks.
+* Task 5 Temporal workflow orchestration to v1.1.
+* Full CI quality gate and broader production launch tasks after milestone completion.
 
-### 🛡️ **Governed Ingestion (The "Fine" in FineR)**
+## 3. Functional Requirements
 
-Don't just ingest data—curate it. FineR’s ingestion engine is a high-integrity pipeline that ensures only the highest quality knowledge enters your system.
+* Multi-tenant logical isolation via mandatory tenant context and tenant filters.
+* REST-first APIs; gRPC optional in later phase.
+* Tenant registry persisted in PostgreSQL.
+* Auth model: API key per tenant (no expiry, revoke-only lifecycle in v1).
+* Lightweight tenant ingestion UI required:
+  * Tenant login using tenant-id + password.
+  * Upload dashboard for files and folders for ingestion.
+* Lightweight tenant search UI required:
+  * Search input for query execution.
+  * Results view for retrieval responses.
+* Vector store: Milvus.
+* Blob store: MinIO (all environments for now).
+* AI provider abstraction through gateway; default gateway Portkey.
+* Embedding service: Qwen3-Embedding-4B as sidecar container.
+* Retrieval quality includes reranking (cross-encoder) in v1 using a provider-hosted reranker API (managed).
+* Async ingestion supported before Temporal (queue-based processing required).
 
-* **Deep Cleaning & Filtering:** Automatic noise reduction, whitespace normalization, and boilerplate removal.
-* **Semantic Deduplication:** Prevent redundant embeddings and save on storage costs.
-* **PII Masking:** Enterprise-grade PII redaction (SSNs, emails, credentials) out of the box.
-* **Multi-Modal Mastery:** Native support for Text, Images, and Audio via a unified blob handler.
+## 4. Governance and Compliance
 
-### 🔐 **Fortified Multi-Tenancy**
+* PII redaction required.
+* Data residency lock: AWS region ap-south-1.
+* Metadata governance and approval workflow required (full Temporal + web UI flow targeted, but orchestration deferred to v1.1).
+* Audit and cost records retention: 90 days.
 
-FineR was built for SaaS and large-scale organizational deployments.
+## 5. Non-Functional Requirements
 
-* **Logical Namespace Isolation:** Secure, mandatory tenant-id context across all layers—zero risk of data leakage.
-* **Resource Quotas:** Granular rate limiting and cost attribution per tenant.
-* **Audit-Ready:** 180-day audit retention and 90-day cost tracking built into the architecture.
+* Retrieval steady-state load target: 300 RPS.
+* Explicit rate limiter required to enforce throughput limits with maximum 600 RPS burst cap.
+* Default per-tenant quota: 2 RPS steady with 4 RPS burst.
+* Retrieval latency target: p95 <\= 800 ms.
+* Availability objective: 99.9%.
+* Security baseline:
+  * TLS in transit.
+  * Encryption at rest for database and object storage.
+* High availability and data cleanup are top priorities.
 
-### 🧩 **Total Sovereignty (Zero Vendor Lock-In)**
+## 6. Observability and Metering
 
-Your data, your infrastructure, your choice. FineR uses an **Interface-First Design** that lets you swap components as your business evolves.
+* OpenTelemetry instrumentation across critical paths.
+* Metrics backend: Prometheus + Grafana.
+* Cost attribution model by tenant must be supported in architecture (detailed implementation may span later milestones).
 
-* **Any Cloud/On-Prem:** Deploy on AWS, Azure, GCP, or your private data center using Docker.
-* **Modular Storage:** Defaulted to **Milvus** for vectors and **MinIO** for blobs—swappable via simple Go interfaces.
-* **AI Flexibility:** Powered by **Qwen3-Embedding** and **Portkey** gateway, giving you the power to switch LLM providers (OpenAI, Gemini, Anthropic) in seconds.
+## 7. Deployment and Runtime
 
----
+* Code generated locally in VS Code using AI agents.
+* Sync local code to EC2 via rsync script.
+* Build, containerization, and deployment executed on EC2.
+* Runtime mode currently: Docker only.
 
-## 🏗️ The Tech Stack (2026 Standard)
+## 8. Quality and Testing Requirements
 
-| Layer | Component | Advantage |
-| --- | --- | --- |
-| **Engine** | **Golang 1.22+** | Type-safety, memory efficiency, and native concurrency. |
-| **Vector DB** | **Milvus** | Distributed, high-availability vector indexing. |
-| **Embeddings** | **Qwen3-Embedding-4B** | State-of-the-art open-source accuracy (Sidecar). |
-| **Gateway** | **Portkey** | Resilient LLM routing and failover orchestration. |
-| **Observability** | **OTel + Grafana** | Full-stack transparency into costs and latency. |
-| **Inference** | **Managed Rerankers** | Cross-encoder precision for top-tier retrieval. |
+* Unit tests for contracts and core middleware.
+* Integration tests for tenant isolation and ingestion quality behavior.
+* RAG evaluation gate approach selected: custom Go evaluator (instead of RAGas sidecar).
 
----
+## 9. Risks and Assumptions
 
-## 🚀 Getting Started
+* Cross-encoder model/provider for reranking not yet finalized.
+* Queue technology choice needs final lock (SQS vs Redis-based in Go ecosystem).
+* Temporal deferral may require temporary orchestration glue that must be replaceable.
 
-FineR is optimized for rapid onboarding with a clean, tenant-centric UI.
+## 10. Finalized Clarifications
 
-### 1. Deploy the Engine
-
-```bash
-# Clone and spin up the FineR stack
-git clone https://github.com/your-org/finer
-docker-compose up -d
-
-```
-
-### 2. Onboard a Tenant
-
-Access the FineR Admin UI to create a tenant, set a 2 RPS quota, and generate a secure API key.
-
-### 3. Ingest Knowledge
-
-Use the **Governed Upload Dashboard** to drop folders or files. FineR will profile, clean, and index them automatically.
-
-### 4. Query with Confidence
-
-```bash
-curl -X POST https://api.finer.io/v1/search \
-  -H "X-Tenant-ID: alpha-corp" \
-  -H "Authorization: Bearer ${FINER_API_KEY}" \
-  -d '{"query": "Summarize our latest security compliance audit."}'
-
-```
-
----
-
-## 📈 Compliance & Security
-
-* **Data Residency:** Locked to your preferred region (e.g., AWS `ap-south-1`).
-* **Encryption:** TLS 1.3 in transit; AES-256 at rest.
-* **Governance:** Mandatory metadata schemas and approval workflows to maintain "Source of Truth" integrity.
-
----
-
-### **Experience the Future of Enterprise RAG.**
-
-Stop settling for slow, unmanaged AI. Deploy **FineR** and give your enterprise the high-speed, governed intelligence it deserves.
-
-**[Request a Demo]** | **[Read the Full Specs]** | **[Contribute on GitHub]**
-
----
-
-> **FineR: The Fine-Tuned Edge of Enterprise Knowledge.**
+* API key lifecycle policy: no expiry, revoke-only in v1.
+* Tenant quota defaults: 2 RPS steady per tenant with 4 RPS burst.
+* Disaster recovery targets: RPO 24h, RTO 4h.
+* Reranker hosting pattern: provider-hosted reranker API (managed).
+* Data cleanup retention policy by class:
+  * Raw blobs: 30 days.
+  * Processed chunks: 90 days.
+  * Audit logs: 180 days.

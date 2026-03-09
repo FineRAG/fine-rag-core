@@ -2,7 +2,7 @@
 
 Date: 2026-03-09
 Stage: Task Packs (Planning Only)
-Inputs: `docs/distilled_requirements.md`, `docs/system_design.md`, `docs/distilled_requirements_vdb_portkey.md`, `docs/system_design_vdb_portkey.md`, `docs/epics/00-epic_summary.md`, `.ai/reviews/epic.review.md`, `.ai/reviews/tasks.review.md`
+Inputs: `docs/distilled_requirements.md`, `docs/system_design.md`, `docs/distilled_requirements_vdb_portkey.md`, `docs/system_design_vdb_portkey.md`, `docs/distilled_requirements_ui_auth_tenant.md`, `docs/system_design_ui_auth_tenant.md`, `docs/epics/00-epic_summary.md`, `.ai/reviews/epic.review.md`, `.ai/reviews/tasks.review.md`
 Task Pack State: approved for downstream agents (review gates are checked)
 
 ## Cross-Epic Dependency Map
@@ -26,6 +26,17 @@ Task Pack State: approved for downstream agents (review gates are checked)
 17. `E5-T4 -> E5-T5`
 18. `E5-T3 -> E5-T6`
 19. `E5-T5 -> E5-T6`
+20. `E5-T6 -> E6-T1`
+21. `E6-T1 -> E6-T2`
+22. `E6-T1 -> E6-T3`
+23. `E6-T2 -> E6-T4`
+24. `E6-T1 -> E6-T5`
+25. `E6-T1 -> E6-T6`
+26. `E6-T2 -> E6-T6`
+27. `E6-T3 -> E6-T7`
+28. `E6-T4 -> E6-T7`
+29. `E6-T5 -> E6-T7`
+30. `E6-T6 -> E6-T7`
 
 ## Parallelization Rules
 
@@ -38,6 +49,10 @@ Task Pack State: approved for downstream agents (review gates are checked)
 7. E5 Window B (allowed): `E5-T2` and `E5-T3` can run in parallel after `E5-T1` merges.
 8. Not allowed: `E5-T5` cannot start until both `E5-T2` and `E5-T4` are complete.
 9. Not allowed: `E5-T6` is final closeout only after `E5-T3` and `E5-T5` are complete.
+10. E6 Window A (allowed): `E6-T1` and `E6-T6` can run in parallel after E5 closeout.
+11. E6 Window B (allowed): `E6-T2` and `E6-T3` can run in parallel after `E6-T1` merges.
+12. E6 Window C (allowed): `E6-T4` and `E6-T5` can run in parallel after prerequisite merges.
+13. Not allowed: `E6-T7` is final closeout only after `E6-T3`, `E6-T4`, `E6-T5`, and `E6-T6` are complete.
 
 ## Global Task Board
 
@@ -61,13 +76,20 @@ Task Pack State: approved for downstream agents (review gates are checked)
 - [x] `E5-T4` Portkey Gateway Adapter Integration and Fallback Policy Wiring (`docs/epics/05-epic_05/04-5E-Task.md`)
 - [x] `E5-T5` Secrets, Observability, and Governance Controls for VDB/Gateway (`docs/epics/05-epic_05/05-5E-Task.md`)
 - [x] `E5-T6` Documentation and Operational Runbook Closure (`docs/epics/05-epic_05/06-5E-Task.md`)
+- [x] `E6-T1` Ingestion UI Login Gate and Auth-Protected API Wrapper (`docs/epics/06-epic_06/01-6E-Task.md`)
+- [x] `E6-T2` Ingestion Tenant Create/Select Flow with Single-Tenant Auto-Open (`docs/epics/06-epic_06/02-6E-Task.md`)
+- [x] `E6-T3` Demo Bootstrap Defaults and Non-Demo Guardrails (`docs/epics/06-epic_06/03-6E-Task.md`)
+- [x] `E6-T4` Ingestion API Key Create/Revoke Popup UX (`docs/epics/06-epic_06/04-6E-Task.md`)
+- [x] `E6-T5` Ingestion Source Modes: URI and Local File/Folder (`docs/epics/06-epic_06/05-6E-Task.md`)
+- [x] `E6-T6` Query UI Login Gate and Session Handling (`docs/epics/06-epic_06/06-6E-Task.md`)
+- [x] `E6-T7` Cross-App Test and Regression Pack Updates (`docs/epics/06-epic_06/07-6E-Task.md`)
 
 ## Status Rollup
 
 - Not started: 0
 - In progress: 0
 - In security/deploy evidence: 0
-- Completed: 20
+- Completed: 27
 
 ## Evidence Policy
 
@@ -81,3 +103,4 @@ Task Pack State: approved for downstream agents (review gates are checked)
 1. Epic review gate: checked (`Proceed to Task Packs`).
 2. Task pack review gate: checked (`Proceed to Coding/Testing/Security/Deployment Execution`).
 3. E5 task packs are approved for CodingAgent, TestingAgent, and SecurityGovAgent execution when dependency prerequisites are met.
+4. E6 task packs are approved for CodingAgent, TestingAgent, and SecurityGovAgent execution when dependency prerequisites are met.

@@ -1,7 +1,18 @@
-export type Session = {
-  tenantId: string
+export type AuthStatus = 'logged_out' | 'authenticating' | 'authenticated' | 'expired' | 'error'
+
+export type AuthSession = {
+  username: string
+  token: string
   requestId: string
-  apiKey: string
+}
+
+export type TenantSession = AuthSession & {
+  tenantId: string
+}
+
+export type TenantRecord = {
+  tenantId: string
+  displayName: string
 }
 
 export type SearchTrace = {
