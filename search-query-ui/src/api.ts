@@ -1,6 +1,7 @@
 import type { AuthSession, StreamEvent, TenantRecord, TenantSession } from './types'
 
-const defaultBaseUrl = 'http://localhost:8080'
+const defaultBaseUrl =
+  typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost:8080'
 
 export class SessionExpiredError extends Error {
   constructor(message = 'session expired') {

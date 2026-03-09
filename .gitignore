@@ -6,3 +6,8 @@ docs/workflow_review.md
 docs/workflow_review_guide.md
 scripts/
 tools/
+
+# Cloud deployment and host-specific proxy files (local only; never commit)
+run_stack_with_tunnel.sh
+cloud-apps.conf
+setup_cloud_proxy.sh
