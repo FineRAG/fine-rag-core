@@ -13,4 +13,4 @@ Owner: ExecutionManagerAgent
 | E2-T3 | `feature/E2-T3-async-queue-worker-indexing` | completed | completed (rsync + compose deploy succeeded) | health-check PASS (`scripts/check_stack.sh`) | merged to dev (no gh CLI PR) |
 | E3-T1 | `feature/E3-T1-retrieval-api-rerank` | completed | completed (rsync + compose deploy succeeded) | health-check PASS (`scripts/check_stack.sh`) | merged to dev (no gh CLI PR) |
 | E3-T2 | `feature/E3-T2-slo-security-governance-validation` | completed | completed (rsync + compose deploy succeeded) | health-check PASS (`scripts/check_stack.sh`) | merge verified (`dev` already up to date; no gh CLI PR) |
-| E3-T3 | `feature/E3-T3-operability-release-readiness-stage-handoff` | completed | completed (rsync + compose deploy succeeded) | health-check PASS (`scripts/check_stack.sh`) | PR manual (gh CLI missing) |
+| E3-T3 | `feature/E3-T3-operability-release-readiness-stage-handoff` | completed | completed (rsync + compose deploy succeeded) | health-check PASS (`scripts/check_stack.sh`) | merged to dev (manual PR handoff; gh CLI missing) |

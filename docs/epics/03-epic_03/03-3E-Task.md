@@ -48,6 +48,7 @@ ls docs/epics/00-task-planning-across-all-epics.md \
    - TestingAgent supporting check PASS: `runTests(mode=run)` summary `passed=36 failed=0`.
    - SecurityGovAgent PASS: `scripts/securitygov_review.sh 'E3-T3|Operability|Readiness|Handoff|Deployment|Rollback|Runbook|Incident|DLQ'`.
    - DeploymentAgent PASS: `scripts/deploy_sync_health.sh` completed with rsync sync, remote compose deploy, and `scripts/check_stack.sh` endpoint/service health PASS.
+   - DeploymentAgent git-flow handoff: branch created via `scripts/git_task_flow.sh create-branch E3-T3 operability-release-readiness-stage-handoff`; push PASS via `git push -u origin feature/E3-T3-operability-release-readiness-stage-handoff`; PR handoff command executed (`scripts/git_task_flow.sh create-pr ...`, manual fallback due missing `gh`); merge PASS via `scripts/git_task_flow.sh merge-dev feature/E3-T3-operability-release-readiness-stage-handoff`.
 - Notes:
    - Proceed-gate alignment confirmed against `.ai/reviews/tasks.review.md` (`Proceed to Coding/Testing/Security/Deployment Execution` checked).
    - Open decisions are captured in `docs/epics/03-epic_03/E3-T3-readiness-handoff.md` with next-owner assignment and follow-up target date.
