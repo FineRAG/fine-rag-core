@@ -180,6 +180,35 @@ docker compose up -d ingestion-dashboard-ui
 
 The UI is served at `http://localhost:14173` when the compose service is running.
 
+## Search Query UI (E4-T2)
+
+The repository includes `search-query-ui/` (React + Vite) for tenant-scoped query input, SSE answer streaming, citation rendering, and trace metadata visibility.
+
+1. Local development:
+
+```bash
+cd search-query-ui
+npm ci
+VITE_SEARCH_API_BASE_URL=http://localhost:8080 npm run dev
+```
+
+2. Frontend quality gates:
+
+```bash
+cd search-query-ui
+npm run lint
+npm run test
+npm run build
+```
+
+3. Containerized serving path:
+
+```bash
+docker compose up -d search-query-ui
+```
+
+The UI is served at `http://localhost:14174` when the compose service is running.
+
 Validation is OK when:
 
 - All commands exit with code `0`.

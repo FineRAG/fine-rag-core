@@ -22,11 +22,12 @@ Owner: ExecutionManagerAgent
 
 ## Current Run Scope
 
-- Active task in this run: `E4-T1` Ingestion Dashboard UI Package (React + Vite)
+- Active task in this run: `E4-T2` Search Query UI Package (React + Vite)
 - Execution mode: single active implementation task (parallelization intentionally disabled for this run)
 - Orchestration outcome:
-	- CodingAgent: PASS (`ingestion-dashboard-ui/` package and required screens/flows implemented)
-	- TestingAgent: PASS (`lint`, `test`, `build`, and `go test ./... -run 'Ingestion|APIKey' -count=1`)
-	- SecurityGovAgent: PASS (`scripts/securitygov_review.sh 'E4-T1|Ingestion|APIKey|Frontend|React|Vite'`)
-	- DeploymentAgent: PASS (`scripts/deploy_sync_health.sh`, service `ingestion-dashboard-ui` healthy on `:14173`)
-- Current stage: `E4-T1` completed; awaiting user approval before selecting the next dependency-eligible task.
+  - CodingAgent: PASS (`search-query-ui/` package and required screens/flows implemented)
+  - TestingAgent: PASS (`npm --prefix search-query-ui run lint`, `npm --prefix search-query-ui run test`, `npm --prefix search-query-ui run build`, and retrieval compatibility tests)
+  - SecurityGovAgent: PASS (`scripts/securitygov_review.sh 'E4-T2|Retrieval|Rerank|Citation|Frontend|React|Vite|SSE'`)
+  - DeploymentAgent: PASS (`scripts/deploy_sync_health.sh`, service `search-query-ui` healthy on `:14174`)
+- User-selected tasks: `E4-T2`
+- Current stage: `E4-T2` completed and ready for next dependency-eligible task selection.
