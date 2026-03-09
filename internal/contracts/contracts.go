@@ -317,6 +317,30 @@ type IngestionMetadata struct {
 	CapturedAt     time.Time
 }
 
+type TenantRecord struct {
+	TenantID    TenantID
+	DisplayName string
+	PlanTier    string
+	Active      bool
+	UpdatedAt   time.Time
+}
+
+func (t TenantRecord) Validate() error {
+	if err := t.TenantID.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(t.DisplayName) == "" {
+		return errors.New("display_name is required")
+	}
+	if strings.TrimSpace(t.PlanTier) == "" {
+		return errors.New("plan_tier is required")
+	}
+	if t.UpdatedAt.IsZero() {
+		return errors.New("updated_at is required")
+	}
+	return nil
+}
+
 func (m IngestionMetadata) Validate() error {
 	if err := m.TenantID.Validate(); err != nil {
 		return err
@@ -575,6 +599,21 @@ func (d RateLimitDecision) Validate() error {
 
 type AuditSink interface {
 	Write(ctx context.Context, event AuditEvent) error
+}
+
+type TenantRegistryRepository interface {
+	Upsert(ctx context.Context, tenant TenantRecord) error
+	GetByTenantID(ctx context.Context, tenantID TenantID) (TenantRecord, error)
+}
+
+type IngestionMetadataRepository interface {
+	Save(ctx context.Context, metadata IngestionMetadata) error
+	GetByChecksum(ctx context.Context, tenantID TenantID, checksumSHA256 string) (IngestionMetadata, error)
+}
+
+type AuditEventRepository interface {
+	Save(ctx context.Context, event AuditEvent) error
+	ListByTenant(ctx context.Context, tenantID TenantID, limit int) ([]AuditEvent, error)
 }
 
 type VectorSearcher interface {

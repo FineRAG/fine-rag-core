@@ -31,9 +31,9 @@ Out of scope:
 
 - [x] `E4-T1` Ingestion Dashboard UI Package (React + Vite) (`01-4E-Task.md`)
 - [x] `E4-T2` Search Query UI Package (React + Vite) (`02-4E-Task.md`)
-- [ ] `E4-T3` PostgreSQL Repository Adapter and Persistence Wiring (`03-4E-Task.md`)
-- [ ] `E4-T4` External PostgreSQL URL Integration and Migration Bootstrap Strategy (`04-4E-Task.md`)
-- [ ] `E4-T5` AWS SQS + DLQ Adapter Wiring, Secrets, and Local Fallback (`05-4E-Task.md`)
+- [x] `E4-T3` PostgreSQL Repository Adapter and Persistence Wiring (`03-4E-Task.md`)
+- [x] `E4-T4` External PostgreSQL URL Integration and Migration Bootstrap Strategy (`04-4E-Task.md`)
+- [x] `E4-T5` AWS SQS + DLQ Adapter Wiring, Secrets, and Local Fallback (`05-4E-Task.md`)
 
 ## Entry Criteria
 
@@ -81,6 +81,6 @@ Soft dependencies:
 
 ## Status Rollup
 
-- Not started: 3
+- Not started: 0
 - In progress: 0
-- Completed: 2
+- Completed: 5

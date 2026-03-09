@@ -40,16 +40,16 @@ Task Pack State: approved for downstream agents (review gates are checked)
 - [x] `E3-T3` Operability, Release Readiness, and Stage Handoff (`docs/epics/03-epic_03/03-3E-Task.md`)
 - [x] `E4-T1` Ingestion Dashboard UI Package (React + Vite) (`docs/epics/04-epic_04/01-4E-Task.md`)
 - [x] `E4-T2` Search Query UI Package (React + Vite) (`docs/epics/04-epic_04/02-4E-Task.md`)
-- [ ] `E4-T3` PostgreSQL Repository Adapter and Persistence Wiring (`docs/epics/04-epic_04/03-4E-Task.md`)
-- [ ] `E4-T4` External PostgreSQL URL Integration and Migration Bootstrap Strategy (`docs/epics/04-epic_04/04-4E-Task.md`)
-- [ ] `E4-T5` AWS SQS + DLQ Adapter Wiring, Secrets, and Local Fallback (`docs/epics/04-epic_04/05-4E-Task.md`)
+- [x] `E4-T3` PostgreSQL Repository Adapter and Persistence Wiring (`docs/epics/04-epic_04/03-4E-Task.md`)
+- [x] `E4-T4` External PostgreSQL URL Integration and Migration Bootstrap Strategy (`docs/epics/04-epic_04/04-4E-Task.md`)
+- [x] `E4-T5` AWS SQS + DLQ Adapter Wiring, Secrets, and Local Fallback (`docs/epics/04-epic_04/05-4E-Task.md`)
 
 ## Status Rollup
 
-- Not started: 3
+- Not started: 0
 - In progress: 0
 - In security/deploy evidence: 0
-- Completed: 11
+- Completed: 14
 
 ## Evidence Policy
 

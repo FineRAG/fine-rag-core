@@ -27,6 +27,13 @@ func NewDeterministicPolicyService(auditSink contracts.AuditSink) *Deterministic
 	return NewDeterministicPolicyServiceWithClock(auditSink, func() time.Time { return time.Now().UTC().Round(0) })
 }
 
+func NewDeterministicPolicyServiceWithRepository(repo contracts.AuditEventRepository) *DeterministicPolicyService {
+	if repo == nil {
+		return NewDeterministicPolicyService(nil)
+	}
+	return NewDeterministicPolicyService(auditRepositorySink{repo: repo})
+}
+
 func NewDeterministicPolicyServiceWithClock(auditSink contracts.AuditSink, clock func() time.Time) *DeterministicPolicyService {
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC().Round(0) }
@@ -116,4 +123,12 @@ func toAuditOutcome(decision contracts.IngestionStatus) contracts.AuditOutcome {
 		return contracts.AuditOutcomeAllowed
 	}
 	return contracts.AuditOutcomeDenied
+}
+
+type auditRepositorySink struct {
+	repo contracts.AuditEventRepository
+}
+
+func (s auditRepositorySink) Write(ctx context.Context, event contracts.AuditEvent) error {
+	return s.repo.Save(ctx, event)
 }
