@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: finerag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: finerag
+      POSTGRES_PASSWORD: finerag_dev_password
+      POSTGRES_DB: finerag
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:latest
+    container_name: finerag-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    volumes:
+      - minio_data:/data
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: finerag-etcd
+    restart: unless-stopped
+    command: >-
+      etcd
+      -advertise-client-urls=http://etcd:2379
+      -listen-client-urls=http://0.0.0.0:2379
+      --data-dir /etcd
+    volumes:
+      - etcd_data:/etcd
+
+  milvus:
+    image: milvusdb/milvus:v2.4.13
+    container_name: finerag-milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    depends_on:
+      - etcd
+      - minio
+    ports:
+      - "19530:19530"
+      - "19091:9091"
+    volumes:
+      - milvus_data:/var/lib/milvus
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: finerag-prometheus
+    restart: unless-stopped
+    ports:
+      - "19090:9090"
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: finerag-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    depends_on:
+      - prometheus
+    ports:
+      - "13000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  postgres_data:
+  minio_data:
+  etcd_data:
+  milvus_data:
+  grafana_data:

@@ -1,4 +1,4 @@
-package middleware
+package middleware_test
 
 import (
 	"encoding/json"
@@ -7,15 +7,16 @@ import (
 	"testing"
 
 	"enterprise-go-rag/internal/contracts"
+	"enterprise-go-rag/internal/middleware"
 )
 
 func TestTenantContextMiddlewareRejectsMissingTenant(t *testing.T) {
-	h := TenantContextMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := middleware.TenantContextMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("handler should not execute when tenant context is missing")
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/search", nil)
-	req.Header.Set(RequestIDHeader, "req-1")
+	req.Header.Set(middleware.RequestIDHeader, "req-1")
 	res := httptest.NewRecorder()
 
 	h.ServeHTTP(res, req)
@@ -24,7 +25,7 @@ func TestTenantContextMiddlewareRejectsMissingTenant(t *testing.T) {
 		t.Fatalf("expected 401, got %d", res.Code)
 	}
 
-	var body TenantContextRejection
+	var body middleware.TenantContextRejection
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode rejection body: %v", err)
 	}
@@ -34,12 +35,12 @@ func TestTenantContextMiddlewareRejectsMissingTenant(t *testing.T) {
 }
 
 func TestTenantContextMiddlewareRejectsMissingRequestID(t *testing.T) {
-	h := TenantContextMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := middleware.TenantContextMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("handler should not execute when request id is missing")
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/search", nil)
-	req.Header.Set(AuthenticatedTenantIDHeader, "tenant-a")
+	req.Header.Set(middleware.AuthenticatedTenantIDHeader, "tenant-a")
 	res := httptest.NewRecorder()
 
 	h.ServeHTTP(res, req)
@@ -51,7 +52,7 @@ func TestTenantContextMiddlewareRejectsMissingRequestID(t *testing.T) {
 
 func TestTenantContextMiddlewareInjectsTenantContext(t *testing.T) {
 	called := false
-	h := TenantContextMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	h := middleware.TenantContextMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		called = true
 		tenantCtx, err := contracts.TenantContextFromContext(r.Context())
 		if err != nil {
@@ -66,8 +67,8 @@ func TestTenantContextMiddlewareInjectsTenantContext(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/search", nil)
-	req.Header.Set(AuthenticatedTenantIDHeader, "tenant-a")
-	req.Header.Set(RequestIDHeader, "req-1")
+	req.Header.Set(middleware.AuthenticatedTenantIDHeader, "tenant-a")
+	req.Header.Set(middleware.RequestIDHeader, "req-1")
 	res := httptest.NewRecorder()
 
 	h.ServeHTTP(res, req)
@@ -86,7 +87,7 @@ func TestTenantContextObservabilityMetadataRedactsTenantID(t *testing.T) {
 		t.Fatalf("seed tenant context: %v", err)
 	}
 
-	meta, err := ObservabilityMetadataFromContext(ctx)
+	meta, err := middleware.ObservabilityMetadataFromContext(ctx)
 	if err != nil {
 		t.Fatalf("extract observability metadata: %v", err)
 	}
