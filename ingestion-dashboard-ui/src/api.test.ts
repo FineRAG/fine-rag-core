@@ -1,17 +1,12 @@
 import {
-  __resetDemoStoreForTests,
   buildTenantHeaders,
-  getDemoDefaults,
+  createRequestId,
   serializeIngestionPayloadFromLocal,
   serializeIngestionPayloadFromUri,
 } from './api'
 import type { TenantSession } from './types'
 
 describe('api helpers', () => {
-  beforeEach(() => {
-    __resetDemoStoreForTests()
-  })
-
   it('serializes URI ingestion payload with trimmed fields', () => {
     const payload = serializeIngestionPayloadFromUri(' s3://tenant-a/docs/file.pdf ', ' abc123 ')
 
@@ -22,7 +17,7 @@ describe('api helpers', () => {
     })
   })
 
-  it('serializes local ingestion payload with deterministic metadata', () => {
+  it('serializes local ingestion payload with object keys', () => {
     const payload = serializeIngestionPayloadFromLocal(
       [
         {
@@ -34,12 +29,14 @@ describe('api helpers', () => {
         },
       ],
       ' c1 ',
+      ['tenant-a/uploads/folder/doc.txt'],
     )
 
     expect(payload).toEqual({
       sourceMode: 'local',
       sourceUri: 'local://folder%2Fdoc.txt',
       checksum: 'c1',
+      objectKeys: ['tenant-a/uploads/folder/doc.txt'],
       localItems: [
         {
           name: 'doc.txt',
@@ -56,7 +53,6 @@ describe('api helpers', () => {
     const session: TenantSession = {
       username: 'admin',
       token: 'secret-key',
-      mode: 'demo',
       tenantId: 'tenant-a',
       requestId: 'req-101',
     }
@@ -69,12 +65,7 @@ describe('api helpers', () => {
     })
   })
 
-  it('exposes demo defaults for local mode bootstrap', () => {
-    expect(getDemoDefaults()).toEqual({
-      username: 'admin',
-      apiKey: 'sk-1234',
-      requestId: 'req-demo-1',
-      tenantId: 'tenant-1234',
-    })
+  it('creates request id with req- prefix', () => {
+    expect(createRequestId()).toContain('req-')
   })
 })

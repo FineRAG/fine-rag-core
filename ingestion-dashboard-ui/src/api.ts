@@ -1,71 +1,25 @@
 import type {
-  ApiKeyRecord,
   AuthSession,
   IngestionJob,
   IngestionPayload,
+  IngestionProgressEvent,
+  KnowledgeBaseRecord,
   LocalItem,
   LoginInput,
-  NewApiKeyResponse,
-  SessionMode,
+  PresignedUploadItem,
   TenantRecord,
   TenantSession,
+  VectorStats,
 } from './types'
 
-const defaultBaseUrl = 'http://localhost:8080'
-const DEMO_USER = 'admin'
-const DEMO_KEY = 'sk-1234'
-const DEMO_TENANT = 'tenant-1234'
+const defaultBaseUrl =
+  typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost:8080'
 
-type DemoStore = {
-  tenants: TenantRecord[]
-  jobs: Record<string, IngestionJob[]>
-  apiKeys: Record<string, ApiKeyRecord[]>
-  keyCounter: number
-  jobCounter: number
-}
-
-let demoStore: DemoStore = {
-  tenants: [{ tenantId: DEMO_TENANT, displayName: 'Demo Tenant 1234' }],
-  jobs: {
-    [DEMO_TENANT]: [
-      {
-        jobId: 'job-demo-1',
-        sourceUri: 's3://tenant-1234-ap-south-1/docs/welcome.txt',
-        status: 'approved',
-        submittedAt: new Date('2026-03-09T10:00:00Z').toISOString(),
-      },
-    ],
-  },
-  apiKeys: {
-    [DEMO_TENANT]: [
-      {
-        keyId: 'key-demo-1',
-        label: 'bootstrap-demo',
-        createdAt: new Date('2026-03-09T10:00:00Z').toISOString(),
-      },
-    ],
-  },
-  keyCounter: 2,
-  jobCounter: 2,
-}
-
-function nextId(prefix: string, value: number): string {
-  return `${prefix}-${String(value).padStart(4, '0')}`
-}
-
-function isDemoEnabled(): boolean {
-  return String(import.meta.env.VITE_DEMO_MODE ?? '').toLowerCase() === 'true'
-}
-
-function isBackendMode(): boolean {
-  return String(import.meta.env.VITE_BACKEND_MODE ?? '').toLowerCase() === 'true'
-}
-
-function resolveMode(): SessionMode {
-  if (isDemoEnabled() && !isBackendMode()) {
-    return 'demo'
+export class SessionExpiredError extends Error {
+  constructor(message = 'session expired') {
+    super(message)
+    this.name = 'SessionExpiredError'
   }
-  return 'backend'
 }
 
 function assertAuthSession(session: AuthSession | null | undefined): asserts session is AuthSession {
@@ -81,22 +35,19 @@ function assertTenantSession(session: TenantSession | null | undefined): asserts
   }
 }
 
+function assertNotExpired(response: Response): void {
+  if (response.status === 401 || response.status === 403) {
+    throw new SessionExpiredError('session expired; please log in again')
+  }
+}
+
 export function getApiBaseUrl(): string {
   const fromEnv = import.meta.env.VITE_INGESTION_API_BASE_URL
   return fromEnv && String(fromEnv).trim() ? String(fromEnv).trim() : defaultBaseUrl
 }
 
-export function isDemoMode(): boolean {
-  return !isBackendMode() && isDemoEnabled()
-}
-
-export function getDemoDefaults(): LoginInput & { tenantId: string } {
-  return {
-    username: DEMO_USER,
-    apiKey: DEMO_KEY,
-    requestId: 'req-demo-1',
-    tenantId: DEMO_TENANT,
-  }
+export function createRequestId(): string {
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 export function buildTenantHeaders(session: TenantSession): HeadersInit {
@@ -109,29 +60,8 @@ export function buildTenantHeaders(session: TenantSession): HeadersInit {
   }
 }
 
-export function createRequestId(): string {
-  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-}
-
 export async function login(input: LoginInput): Promise<AuthSession> {
-  const requestId = input.requestId.trim() || createRequestId()
-  const mode = resolveMode()
-
-  if (mode === 'demo') {
-    if (!isDemoEnabled()) {
-      throw new Error('demo mode is disabled for this build')
-    }
-    if (input.username.trim() !== DEMO_USER || input.apiKey.trim() !== DEMO_KEY) {
-      throw new Error('invalid credentials')
-    }
-    return {
-      username: input.username.trim(),
-      token: input.apiKey.trim(),
-      requestId,
-      mode,
-    }
-  }
-
+  const requestId = createRequestId()
   const response = await fetch(`${getApiBaseUrl()}/api/v1/auth/login`, {
     method: 'POST',
     headers: {
@@ -140,9 +70,11 @@ export async function login(input: LoginInput): Promise<AuthSession> {
     },
     body: JSON.stringify({
       username: input.username.trim(),
-      apiKey: input.apiKey.trim(),
+      password: input.password,
     }),
   })
+
+  assertNotExpired(response)
   if (!response.ok) {
     throw new Error(`failed to login: ${response.status}`)
   }
@@ -156,17 +88,11 @@ export async function login(input: LoginInput): Promise<AuthSession> {
     username: input.username.trim(),
     token: payload.token,
     requestId,
-    mode,
   }
 }
 
 export async function listTenants(session: AuthSession): Promise<TenantRecord[]> {
   assertAuthSession(session)
-
-  if (session.mode === 'demo') {
-    return [...demoStore.tenants]
-  }
-
   const response = await fetch(`${getApiBaseUrl()}/api/v1/tenants`, {
     headers: {
       Authorization: `Bearer ${session.token}`,
@@ -174,6 +100,8 @@ export async function listTenants(session: AuthSession): Promise<TenantRecord[]>
       'X-Request-ID': session.requestId,
     },
   })
+
+  assertNotExpired(response)
   if (!response.ok) {
     throw new Error(`failed to list tenants: ${response.status}`)
   }
@@ -181,39 +109,32 @@ export async function listTenants(session: AuthSession): Promise<TenantRecord[]>
   return (await response.json()) as TenantRecord[]
 }
 
-export async function createTenant(session: AuthSession, tenantId: string): Promise<TenantRecord> {
-  assertAuthSession(session)
-  const normalized = tenantId.trim()
-  if (!normalized) {
-    throw new Error('tenant id is required')
-  }
-
-  if (session.mode === 'demo') {
-    const existing = demoStore.tenants.find((item) => item.tenantId === normalized)
-    if (existing) {
-      return existing
-    }
-    const created = { tenantId: normalized, displayName: normalized }
-    demoStore.tenants = [...demoStore.tenants, created]
-    demoStore.jobs[normalized] = []
-    demoStore.apiKeys[normalized] = []
-    return created
-  }
-
-  const response = await fetch(`${getApiBaseUrl()}/api/v1/tenants`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${session.token}`,
-      'Content-Type': 'application/json',
-      'X-Request-ID': session.requestId,
-    },
-    body: JSON.stringify({ tenantId: normalized }),
+export async function fetchKnowledgeBases(session: TenantSession): Promise<KnowledgeBaseRecord[]> {
+  assertTenantSession(session)
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/knowledge-bases`, {
+    headers: buildTenantHeaders(session),
   })
+
+  assertNotExpired(response)
   if (!response.ok) {
-    throw new Error(`failed to create tenant: ${response.status}`)
+    throw new Error(`failed to fetch knowledge bases: ${response.status}`)
   }
 
-  return (await response.json()) as TenantRecord
+  return (await response.json()) as KnowledgeBaseRecord[]
+}
+
+export async function fetchVectorStats(session: TenantSession): Promise<VectorStats> {
+  assertTenantSession(session)
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/tenants/${session.tenantId}/vector-stats`, {
+    headers: buildTenantHeaders(session),
+  })
+
+  assertNotExpired(response)
+  if (!response.ok) {
+    throw new Error(`failed to fetch vector stats: ${response.status}`)
+  }
+
+  return (await response.json()) as VectorStats
 }
 
 export function serializeIngestionPayloadFromUri(sourceUri: string, checksum: string): IngestionPayload {
@@ -224,7 +145,11 @@ export function serializeIngestionPayloadFromUri(sourceUri: string, checksum: st
   }
 }
 
-export function serializeIngestionPayloadFromLocal(items: LocalItem[], checksum: string): IngestionPayload {
+export function serializeIngestionPayloadFromLocal(
+  items: LocalItem[],
+  checksum: string,
+  objectKeys: string[],
+): IngestionPayload {
   const normalizedItems = items.map((item) => ({
     name: item.name,
     size: item.size,
@@ -232,41 +157,79 @@ export function serializeIngestionPayloadFromLocal(items: LocalItem[], checksum:
     lastModified: item.lastModified,
     relativePath: item.relativePath,
   }))
+
   const first = normalizedItems[0]
-  const syntheticUri = first
-    ? `local://${encodeURIComponent(first.relativePath || first.name)}`
-    : 'local://empty-selection'
+  const syntheticUri = first ? `local://${encodeURIComponent(first.relativePath)}` : 'local://empty-selection'
 
   return {
     sourceMode: 'local',
     sourceUri: syntheticUri,
     checksum: checksum.trim(),
+    objectKeys,
     localItems: normalizedItems,
   }
 }
 
-export async function submitIngestionJob(
+export async function requestPresignedUploads(
   session: TenantSession,
-  payload: IngestionPayload,
-): Promise<IngestionJob> {
+  items: LocalItem[],
+): Promise<PresignedUploadItem[]> {
   assertTenantSession(session)
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/uploads/presign`, {
+    method: 'POST',
+    headers: buildTenantHeaders(session),
+    body: JSON.stringify({
+      files: items.map((item) => ({
+        name: item.name,
+        size: item.size,
+        type: item.type,
+        relativePath: item.relativePath,
+      })),
+    }),
+  })
 
-  if (session.mode === 'demo') {
-    const created: IngestionJob = {
-      jobId: nextId('job-demo', demoStore.jobCounter++),
-      sourceUri: payload.sourceUri,
-      status: payload.sourceMode === 'local' ? 'processing' : 'queued',
-      submittedAt: new Date().toISOString(),
-    }
-    demoStore.jobs[session.tenantId] = [created, ...(demoStore.jobs[session.tenantId] ?? [])]
-    return created
+  assertNotExpired(response)
+  if (!response.ok) {
+    throw new Error(`failed to create presigned uploads: ${response.status}`)
   }
 
+  const payload = (await response.json()) as { uploads?: PresignedUploadItem[] }
+  if (!payload.uploads || payload.uploads.length === 0) {
+    throw new Error('failed to create presigned uploads: no uploads returned')
+  }
+  return payload.uploads
+}
+
+export async function uploadLocalFilesToMinio(
+  uploads: PresignedUploadItem[],
+  filesByRelativePath: Map<string, File>,
+): Promise<void> {
+  for (const upload of uploads) {
+    const sourceFile = filesByRelativePath.get(upload.relativePath)
+    if (!sourceFile) {
+      throw new Error(`missing selected file for ${upload.relativePath}`)
+    }
+
+    const response = await fetch(upload.uploadUrl, {
+      method: 'PUT',
+      headers: upload.headers ?? {},
+      body: sourceFile,
+    })
+    if (!response.ok) {
+      throw new Error(`failed to upload ${upload.relativePath}: ${response.status}`)
+    }
+  }
+}
+
+export async function submitIngestionJob(session: TenantSession, payload: IngestionPayload): Promise<IngestionJob> {
+  assertTenantSession(session)
   const response = await fetch(`${getApiBaseUrl()}/api/v1/ingestion/jobs`, {
     method: 'POST',
     headers: buildTenantHeaders(session),
     body: JSON.stringify(payload),
   })
+
+  assertNotExpired(response)
   if (!response.ok) {
     throw new Error(`failed to submit ingestion job: ${response.status}`)
   }
@@ -276,14 +239,11 @@ export async function submitIngestionJob(
 
 export async function fetchIngestionJobs(session: TenantSession): Promise<IngestionJob[]> {
   assertTenantSession(session)
-
-  if (session.mode === 'demo') {
-    return [...(demoStore.jobs[session.tenantId] ?? [])]
-  }
-
   const response = await fetch(`${getApiBaseUrl()}/api/v1/ingestion/jobs`, {
     headers: buildTenantHeaders(session),
   })
+
+  assertNotExpired(response)
   if (!response.ok) {
     throw new Error(`failed to fetch ingestion jobs: ${response.status}`)
   }
@@ -291,97 +251,97 @@ export async function fetchIngestionJobs(session: TenantSession): Promise<Ingest
   return (await response.json()) as IngestionJob[]
 }
 
-export async function fetchApiKeys(session: TenantSession): Promise<ApiKeyRecord[]> {
+export async function retryFailedIngestionFile(
+  session: TenantSession,
+  jobId: string,
+  relativePath: string,
+): Promise<void> {
   assertTenantSession(session)
-
-  if (session.mode === 'demo') {
-    return [...(demoStore.apiKeys[session.tenantId] ?? [])]
-  }
-
-  const response = await fetch(`${getApiBaseUrl()}/api/v1/tenants/${session.tenantId}/api-keys`, {
-    headers: buildTenantHeaders(session),
-  })
-  if (!response.ok) {
-    throw new Error(`failed to fetch API keys: ${response.status}`)
-  }
-
-  return (await response.json()) as ApiKeyRecord[]
-}
-
-export async function createApiKey(session: TenantSession, label: string): Promise<NewApiKeyResponse> {
-  assertTenantSession(session)
-
-  if (session.mode === 'demo') {
-    const created = {
-      keyId: nextId('key-demo', demoStore.keyCounter++),
-      value: `sk-demo-${Math.random().toString(36).slice(2, 10)}`,
-      createdAt: new Date().toISOString(),
-    }
-    demoStore.apiKeys[session.tenantId] = [
-      {
-        keyId: created.keyId,
-        label: label.trim(),
-        createdAt: created.createdAt,
-      },
-      ...(demoStore.apiKeys[session.tenantId] ?? []),
-    ]
-    return created
-  }
-
-  const response = await fetch(`${getApiBaseUrl()}/api/v1/tenants/${session.tenantId}/api-keys`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/ingestion/jobs/${jobId}/retry`, {
     method: 'POST',
     headers: buildTenantHeaders(session),
-    body: JSON.stringify({ label: label.trim() }),
+    body: JSON.stringify({ relativePath }),
   })
-  if (!response.ok) {
-    throw new Error(`failed to create API key: ${response.status}`)
-  }
 
-  return (await response.json()) as NewApiKeyResponse
+  assertNotExpired(response)
+  if (!response.ok) {
+    throw new Error(`failed to retry failed file: ${response.status}`)
+  }
 }
 
-export async function revokeApiKey(session: TenantSession, keyId: string): Promise<void> {
+export async function startIngestionProgressStream(
+  session: TenantSession,
+  callbacks: {
+    onEvent: (event: IngestionProgressEvent) => void
+    onStatus: (status: string) => void
+  },
+  signal?: AbortSignal,
+): Promise<void> {
   assertTenantSession(session)
-
-  if (session.mode === 'demo') {
-    demoStore.apiKeys[session.tenantId] = (demoStore.apiKeys[session.tenantId] ?? []).filter(
-      (item) => item.keyId !== keyId,
-    )
-    return
-  }
-
-  const response = await fetch(`${getApiBaseUrl()}/api/v1/tenants/${session.tenantId}/api-keys/${keyId}`, {
-    method: 'DELETE',
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/ingestion/jobs/stream?tenantId=${encodeURIComponent(session.tenantId)}`, {
+    method: 'GET',
     headers: buildTenantHeaders(session),
+    signal,
   })
+
+  assertNotExpired(response)
   if (!response.ok) {
-    throw new Error(`failed to revoke API key: ${response.status}`)
+    throw new Error(`failed to open ingestion progress stream: ${response.status}`)
   }
+  if (!response.body) {
+    throw new Error('ingestion progress stream body is empty')
+  }
+
+  callbacks.onStatus('Streaming ingestion progress...')
+  const decoder = new TextDecoder()
+  const reader = response.body.getReader()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+
+    buffer += decoder.decode(value, { stream: true })
+    const frames = buffer.split('\n\n')
+    buffer = frames.pop() ?? ''
+
+    for (const frame of frames) {
+      const event = parseSseFrame(frame)
+      if (event) {
+        callbacks.onEvent(event)
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const event = parseSseFrame(buffer)
+    if (event) {
+      callbacks.onEvent(event)
+    }
+  }
+  callbacks.onStatus('Ingestion stream closed.')
 }
 
-export function __resetDemoStoreForTests(): void {
-  demoStore = {
-    tenants: [{ tenantId: DEMO_TENANT, displayName: 'Demo Tenant 1234' }],
-    jobs: {
-      [DEMO_TENANT]: [
-        {
-          jobId: 'job-demo-1',
-          sourceUri: 's3://tenant-1234-ap-south-1/docs/welcome.txt',
-          status: 'approved',
-          submittedAt: new Date('2026-03-09T10:00:00Z').toISOString(),
-        },
-      ],
-    },
-    apiKeys: {
-      [DEMO_TENANT]: [
-        {
-          keyId: 'key-demo-1',
-          label: 'bootstrap-demo',
-          createdAt: new Date('2026-03-09T10:00:00Z').toISOString(),
-        },
-      ],
-    },
-    keyCounter: 2,
-    jobCounter: 2,
+function parseSseFrame(frame: string): IngestionProgressEvent | null {
+  const lines = frame
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  const dataLines = lines
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+
+  if (dataLines.length === 0) {
+    return null
+  }
+
+  const payload = dataLines.join('\n')
+  try {
+    return JSON.parse(payload) as IngestionProgressEvent
+  } catch {
+    return null
   }
 }
