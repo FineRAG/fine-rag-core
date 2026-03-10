@@ -4,26 +4,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"math"
 	"strings"
 	"sync"
 	"time"
 
 	"enterprise-go-rag/internal/adapters/vector"
 	"enterprise-go-rag/internal/contracts"
+
+	milvusSDK "github.com/milvus-io/milvus-sdk-go/v2/client"
 )
 
 type Config struct {
 	Endpoint   string
 	Database   string
 	Collection string
+	Username   string
+	Password   string
+	Token      string
 	TLS        bool
 }
 
 type Adapter struct {
 	cfg       Config
 	mu        sync.Mutex
-	store     map[contracts.TenantID][]contracts.VectorRecord
+	client    milvusSDK.Client
 	lastTrace contracts.VectorCallTrace
 }
 
@@ -40,7 +45,12 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 	if !cfg.TLS {
 		return nil, errors.New("FINE_RAG_MILVUS_TLS must be true for milvus provider")
 	}
-	return &Adapter{cfg: cfg, store: map[contracts.TenantID][]contracts.VectorRecord{}}, nil
+	// Connect to Milvus cloud VDB using official SDK
+	client, err := milvusSDK.NewGrpcClient(cfg.Endpoint, milvusSDK.WithUsername(cfg.Username), milvusSDK.WithPassword(cfg.Password), milvusSDK.WithToken(cfg.Token), milvusSDK.WithTLS(cfg.TLS))
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to Milvus: %w", err)
+	}
+	return &Adapter{cfg: cfg, client: client}, nil
 }
 
 func (a *Adapter) Upsert(ctx context.Context, records []contracts.VectorRecord) error {
@@ -54,24 +64,24 @@ func (a *Adapter) Upsert(ctx context.Context, records []contracts.VectorRecord) 
 			return vector.NormalizeProviderError("milvus", "upsert", err)
 		}
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, record := range records {
-		byTenant := a.store[record.TenantID]
-		replaced := false
-		for i := range byTenant {
-			if byTenant[i].RecordID == record.RecordID {
-				byTenant[i] = record
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			byTenant = append(byTenant, record)
-		}
-		a.store[record.TenantID] = byTenant
-	}
-	return nil
+	// Upsert records to Milvus cloud VDB
+	// Example: Insert vectors into collection
+	// NOTE: This is a stub. Actual implementation should map contracts.VectorRecord to Milvus fields.
+	// See https://milvus.io/docs/v2.2.x/sdk-go.md for details
+	// TODO: Map tenantID to collection/partition if required
+	// Example:
+	// vectors := [][]float32{}
+	// ids := []string{}
+	// for _, record := range records {
+	//     vectors = append(vectors, record.Embedding)
+	//     ids = append(ids, record.RecordID)
+	// }
+	// err := a.client.Insert(ctx, a.cfg.Collection, nil, ids, vectors)
+	// if err != nil {
+	//     return vector.NormalizeProviderError("milvus", "upsert", err)
+	// }
+	// return nil
+	return errors.New("Milvus Upsert not yet implemented: replace stub with SDK call")
 }
 
 func (a *Adapter) Search(ctx context.Context, tenantID contracts.TenantID, queryText string, topK int) ([]contracts.RetrievalDocument, error) {
@@ -87,27 +97,38 @@ func (a *Adapter) Search(ctx context.Context, tenantID contracts.TenantID, query
 		return nil, vector.NormalizeProviderError("milvus", "search", errors.New("top_k must be > 0"))
 	}
 
-	a.mu.Lock()
-	records := make([]contracts.VectorRecord, len(a.store[tenantID]))
-	copy(records, a.store[tenantID])
-	a.mu.Unlock()
+	// Search vectors in Milvus cloud VDB
+	// NOTE: This is a stub. Actual implementation should use Milvus SDK search API.
+	// TODO: Embed queryText, search topK in collection, map results to RetrievalDocument
+	return nil, errors.New("Milvus Search not yet implemented: replace stub with SDK call")
+}
 
-	docs := make([]contracts.RetrievalDocument, 0, len(records))
-	for _, record := range records {
-		score := lexicalScore(queryText, record.ChunkText)
-		docs = append(docs, contracts.RetrievalDocument{
-			DocumentID: record.RecordID,
-			TenantID:   record.TenantID,
-			Content:    record.ChunkText,
-			Score:      score,
-			SourceURI:  record.SourceURI,
-		})
+func (a *Adapter) SearchByEmbedding(ctx context.Context, tenantID contracts.TenantID, queryEmbedding []float32, topK int) ([]contracts.RetrievalDocument, error) {
+	start := time.Now()
+	a.markTrace("ok", start)
+	if err := tenantID.Validate(); err != nil {
+		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", err)
 	}
-	sort.SliceStable(docs, func(i, j int) bool { return docs[i].Score > docs[j].Score })
-	if topK < len(docs) {
-		docs = docs[:topK]
+	if len(queryEmbedding) == 0 {
+		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", errors.New("query embedding is required"))
 	}
-	return docs, nil
+	if topK <= 0 {
+		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", errors.New("top_k must be > 0"))
+	}
+
+	// Search by embedding in Milvus cloud VDB
+	// NOTE: This is a stub. Actual implementation should use Milvus SDK search API.
+	// TODO: Search topK by embedding, map results to RetrievalDocument
+	return nil, errors.New("Milvus SearchByEmbedding not yet implemented: replace stub with SDK call")
+}
+
+func (a *Adapter) PurgeTenant(_ context.Context, tenantID contracts.TenantID) error {
+	if err := tenantID.Validate(); err != nil {
+		return vector.NormalizeProviderError("milvus", "purge", err)
+	}
+	// Purge tenant data from Milvus cloud VDB
+	// NOTE: This is a stub. Actual implementation should delete partition/records for tenant
+	return errors.New("Milvus PurgeTenant not yet implemented: replace stub with SDK call")
 }
 
 func (a *Adapter) LastVectorTrace() contracts.VectorCallTrace {
@@ -142,6 +163,30 @@ func lexicalScore(query string, content string) float64 {
 		return float64(len(content)%13) / 100.0
 	}
 	return float64(hits) + float64(len(content)%10)/100.0
+}
+
+func cosineSimilarity(left []float32, right []float32) float64 {
+	if len(left) == 0 || len(right) == 0 {
+		return 0
+	}
+	n := len(left)
+	if len(right) < n {
+		n = len(right)
+	}
+	var dot float64
+	var leftNorm float64
+	var rightNorm float64
+	for i := 0; i < n; i++ {
+		l := float64(left[i])
+		r := float64(right[i])
+		dot += l * r
+		leftNorm += l * l
+		rightNorm += r * r
+	}
+	if leftNorm == 0 || rightNorm == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(leftNorm) * math.Sqrt(rightNorm))
 }
 
 func (a *Adapter) DebugString() string {
