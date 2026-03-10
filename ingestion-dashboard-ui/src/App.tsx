@@ -5,6 +5,7 @@ import {
   fetchVectorStats,
   listTenants,
   login,
+  purgeTenantData,
   requestPresignedUploads,
   retryFailedIngestionFile,
   serializeIngestionPayloadFromLocal,
@@ -50,7 +51,7 @@ function getExtension(name: string): string {
 
 function App() {
   const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
+  const [apiKeyInput, setApiKeyInput] = useState('')
 
   const [authStatus, setAuthStatus] = useState<AuthStatus>('logged_out')
   const [authSession, setAuthSession] = useState<AuthSession | null>(null)
@@ -70,7 +71,7 @@ function App() {
 
   const [statusMessage, setStatusMessage] = useState('Session is not active.')
 
-  const canLogin = useMemo(() => username.trim() && password, [username, password])
+  const canLogin = useMemo(() => username.trim() && apiKeyInput, [username, apiKeyInput])
 
   const kbSummary = useMemo(() => {
     return knowledgeBases.reduce(
@@ -119,7 +120,7 @@ function App() {
       setSourceUri('')
       clearLocalSelection()
       setSourceMode('uri')
-      setPassword('')
+      setApiKeyInput('')
       setStatusMessage(nextMessage)
     },
     [clearLocalSelection],
@@ -145,7 +146,7 @@ function App() {
     try {
       const next = await login({
         username: username.trim(),
-        password,
+        password: apiKeyInput,
       })
 
       setAuthSession(next)
@@ -275,6 +276,26 @@ function App() {
     }
   }
 
+  async function handlePurgeAllData() {
+  if (!activeSession) {
+    return
+  }
+  if (!window.confirm(`This will delete MinIO objects and vector/job data for ${activeSession.tenantId}. Continue?`)) {
+    return
+  }
+  try {
+    const result = await purgeTenantData(activeSession)
+    await refreshData(activeSession)
+    setStatusMessage(`Purge complete for ${result.tenantId}. Deleted objects: ${result.deletedObjects}.`)
+  } catch (error) {
+    if (error instanceof SessionExpiredError) {
+      resetToLoggedOut('Session expired. Please log in again.', activeSession.tenantId)
+      return
+    }
+    setStatusMessage(error instanceof Error ? error.message : 'purge failed')
+  }
+  }
+
   async function handleRetryFailedFile(jobId: string, relativePath: string) {
     if (!activeSession) {
       return
@@ -318,9 +339,9 @@ function App() {
               <input
                 data-testid="password"
                 type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="password"
+                value={apiKeyInput}
+                onChange={(event) => setApiKeyInput(event.target.value)}
+                placeholder="Enter password"
               />
             </label>
           </div>
@@ -381,6 +402,9 @@ function App() {
           <div className="row-actions">
             <button type="button" onClick={() => void handleRefresh()}>
               Refresh
+            </button>
+            <button type="button" onClick={() => void handlePurgeAllData()}>
+              Purge Tenant Data
             </button>
             <button type="button" onClick={() => resetToLoggedOut('Logged out.', activeSession.tenantId)}>
               Logout

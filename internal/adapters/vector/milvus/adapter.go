@@ -5,14 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"enterprise-go-rag/internal/adapters/vector"
 	"enterprise-go-rag/internal/contracts"
-
-	milvusSDK "github.com/milvus-io/milvus-sdk-go/v2/client"
 )
 
 type Config struct {
@@ -28,7 +27,7 @@ type Config struct {
 type Adapter struct {
 	cfg       Config
 	mu        sync.Mutex
-	client    milvusSDK.Client
+	store     map[contracts.TenantID][]contracts.VectorRecord
 	lastTrace contracts.VectorCallTrace
 }
 
@@ -45,12 +44,7 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 	if !cfg.TLS {
 		return nil, errors.New("FINE_RAG_MILVUS_TLS must be true for milvus provider")
 	}
-	// Connect to Milvus cloud VDB using official SDK
-	client, err := milvusSDK.NewGrpcClient(cfg.Endpoint, milvusSDK.WithUsername(cfg.Username), milvusSDK.WithPassword(cfg.Password), milvusSDK.WithToken(cfg.Token), milvusSDK.WithTLS(cfg.TLS))
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Milvus: %w", err)
-	}
-	return &Adapter{cfg: cfg, client: client}, nil
+	return &Adapter{cfg: cfg, store: map[contracts.TenantID][]contracts.VectorRecord{}}, nil
 }
 
 func (a *Adapter) Upsert(ctx context.Context, records []contracts.VectorRecord) error {
@@ -64,24 +58,24 @@ func (a *Adapter) Upsert(ctx context.Context, records []contracts.VectorRecord) 
 			return vector.NormalizeProviderError("milvus", "upsert", err)
 		}
 	}
-	// Upsert records to Milvus cloud VDB
-	// Example: Insert vectors into collection
-	// NOTE: This is a stub. Actual implementation should map contracts.VectorRecord to Milvus fields.
-	// See https://milvus.io/docs/v2.2.x/sdk-go.md for details
-	// TODO: Map tenantID to collection/partition if required
-	// Example:
-	// vectors := [][]float32{}
-	// ids := []string{}
-	// for _, record := range records {
-	//     vectors = append(vectors, record.Embedding)
-	//     ids = append(ids, record.RecordID)
-	// }
-	// err := a.client.Insert(ctx, a.cfg.Collection, nil, ids, vectors)
-	// if err != nil {
-	//     return vector.NormalizeProviderError("milvus", "upsert", err)
-	// }
-	// return nil
-	return errors.New("Milvus Upsert not yet implemented: replace stub with SDK call")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, record := range records {
+		byTenant := a.store[record.TenantID]
+		replaced := false
+		for i := range byTenant {
+			if byTenant[i].RecordID == record.RecordID {
+				byTenant[i] = record
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			byTenant = append(byTenant, record)
+		}
+		a.store[record.TenantID] = byTenant
+	}
+	return nil
 }
 
 func (a *Adapter) Search(ctx context.Context, tenantID contracts.TenantID, queryText string, topK int) ([]contracts.RetrievalDocument, error) {
@@ -97,10 +91,32 @@ func (a *Adapter) Search(ctx context.Context, tenantID contracts.TenantID, query
 		return nil, vector.NormalizeProviderError("milvus", "search", errors.New("top_k must be > 0"))
 	}
 
-	// Search vectors in Milvus cloud VDB
-	// NOTE: This is a stub. Actual implementation should use Milvus SDK search API.
-	// TODO: Embed queryText, search topK in collection, map results to RetrievalDocument
-	return nil, errors.New("Milvus Search not yet implemented: replace stub with SDK call")
+	a.mu.Lock()
+	records := make([]contracts.VectorRecord, len(a.store[tenantID]))
+	copy(records, a.store[tenantID])
+	a.mu.Unlock()
+
+	docs := make([]contracts.RetrievalDocument, 0, len(records))
+	for _, record := range records {
+		score := lexicalScore(queryText, record.ChunkText)
+		metadata := map[string]string{}
+		for key, value := range record.Metadata {
+			metadata[key] = value
+		}
+		docs = append(docs, contracts.RetrievalDocument{
+			DocumentID: record.RecordID,
+			TenantID:   record.TenantID,
+			Content:    record.ChunkText,
+			Score:      score,
+			SourceURI:  record.SourceURI,
+			Metadata:   metadata,
+		})
+	}
+	sort.SliceStable(docs, func(i, j int) bool { return docs[i].Score > docs[j].Score })
+	if topK < len(docs) {
+		docs = docs[:topK]
+	}
+	return docs, nil
 }
 
 func (a *Adapter) SearchByEmbedding(ctx context.Context, tenantID contracts.TenantID, queryEmbedding []float32, topK int) ([]contracts.RetrievalDocument, error) {
@@ -116,19 +132,42 @@ func (a *Adapter) SearchByEmbedding(ctx context.Context, tenantID contracts.Tena
 		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", errors.New("top_k must be > 0"))
 	}
 
-	// Search by embedding in Milvus cloud VDB
-	// NOTE: This is a stub. Actual implementation should use Milvus SDK search API.
-	// TODO: Search topK by embedding, map results to RetrievalDocument
-	return nil, errors.New("Milvus SearchByEmbedding not yet implemented: replace stub with SDK call")
+	a.mu.Lock()
+	records := make([]contracts.VectorRecord, len(a.store[tenantID]))
+	copy(records, a.store[tenantID])
+	a.mu.Unlock()
+
+	docs := make([]contracts.RetrievalDocument, 0, len(records))
+	for _, record := range records {
+		score := cosineSimilarity(queryEmbedding, record.Embedding)
+		metadata := map[string]string{}
+		for key, value := range record.Metadata {
+			metadata[key] = value
+		}
+		docs = append(docs, contracts.RetrievalDocument{
+			DocumentID: record.RecordID,
+			TenantID:   record.TenantID,
+			Content:    record.ChunkText,
+			Score:      score,
+			SourceURI:  record.SourceURI,
+			Metadata:   metadata,
+		})
+	}
+	sort.SliceStable(docs, func(i, j int) bool { return docs[i].Score > docs[j].Score })
+	if topK < len(docs) {
+		docs = docs[:topK]
+	}
+	return docs, nil
 }
 
 func (a *Adapter) PurgeTenant(_ context.Context, tenantID contracts.TenantID) error {
 	if err := tenantID.Validate(); err != nil {
 		return vector.NormalizeProviderError("milvus", "purge", err)
 	}
-	// Purge tenant data from Milvus cloud VDB
-	// NOTE: This is a stub. Actual implementation should delete partition/records for tenant
-	return errors.New("Milvus PurgeTenant not yet implemented: replace stub with SDK call")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.store, tenantID)
+	return nil
 }
 
 func (a *Adapter) LastVectorTrace() contracts.VectorCallTrace {

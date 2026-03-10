@@ -70,7 +70,7 @@ export async function login(input: LoginInput): Promise<AuthSession> {
     },
     body: JSON.stringify({
       username: input.username.trim(),
-      password: input.password,
+      apiKey: input.password,
     }),
   })
 
@@ -89,6 +89,22 @@ export async function login(input: LoginInput): Promise<AuthSession> {
     token: payload.token,
     requestId,
   }
+}
+
+export async function purgeTenantData(session: TenantSession): Promise<{ status: string; tenantId: string; deletedObjects: number }> {
+  assertTenantSession(session)
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/tenants/${session.tenantId}/purge`, {
+    method: 'POST',
+    headers: buildTenantHeaders(session),
+    body: JSON.stringify({ confirm: 'PURGE' }),
+  })
+
+  assertNotExpired(response)
+  if (!response.ok) {
+    throw new Error(`failed to purge tenant data: ${response.status}`)
+  }
+
+  return (await response.json()) as { status: string; tenantId: string; deletedObjects: number }
 }
 
 export async function listTenants(session: AuthSession): Promise<TenantRecord[]> {

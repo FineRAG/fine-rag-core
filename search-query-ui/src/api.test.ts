@@ -17,7 +17,6 @@ describe('api helpers', () => {
     expect(buildTenantHeaders(session)).toEqual({
       Authorization: 'Bearer secret-key',
       'Content-Type': 'application/json',
-      'X-Request-ID': 'req-101',
       'X-Tenant-ID': 'tenant-a',
     })
   })

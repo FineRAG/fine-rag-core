@@ -3,11 +3,18 @@ package retrieval
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"enterprise-go-rag/internal/contracts"
+	"enterprise-go-rag/internal/logging"
+
+	"go.uber.org/zap"
 )
 
 // Service defines retrieval boundaries for query execution and reranking.
@@ -17,16 +24,24 @@ type Service interface {
 }
 
 type Config struct {
-	RerankTopK       int
-	RerankTimeout    time.Duration
-	FailureThreshold int
-	Clock            func() time.Time
+	RerankTopK        int
+	RerankTimeout     time.Duration
+	FailureThreshold  int
+	Clock             func() time.Time
+	EmbeddingProvider contracts.EmbeddingProvider
+	QueryRewriter     contracts.QueryRewriter
+}
+
+type vectorEmbeddingSearcher interface {
+	SearchByEmbedding(ctx context.Context, tenantID contracts.TenantID, queryEmbedding []float32, topK int) ([]contracts.RetrievalDocument, error)
 }
 
 type DeterministicRetrievalService struct {
-	searcher contracts.VectorSearcher
-	reranker contracts.Reranker
-	clock    func() time.Time
+	searcher      contracts.VectorSearcher
+	reranker      contracts.Reranker
+	embedder      contracts.EmbeddingProvider
+	queryRewriter contracts.QueryRewriter
+	clock         func() time.Time
 
 	rerankTopK       int
 	rerankTimeout    time.Duration
@@ -57,6 +72,8 @@ func NewDeterministicRetrievalService(searcher contracts.VectorSearcher, reranke
 	return &DeterministicRetrievalService{
 		searcher:         searcher,
 		reranker:         reranker,
+		embedder:         cfg.EmbeddingProvider,
+		queryRewriter:    cfg.QueryRewriter,
 		clock:            clock,
 		rerankTopK:       rerankTopK,
 		rerankTimeout:    rerankTimeout,
@@ -79,7 +96,7 @@ func (s *DeterministicRetrievalService) Search(ctx context.Context, metadata con
 		return contracts.RetrievalResult{}, errors.New("vector searcher is required")
 	}
 
-	docs, err := s.searcher.Search(ctx, query.TenantID, query.Text, query.TopK)
+	docs, effectiveQuery, err := s.searchDocuments(ctx, query)
 	if err != nil {
 		return contracts.RetrievalResult{}, err
 	}
@@ -90,6 +107,7 @@ func (s *DeterministicRetrievalService) Search(ctx context.Context, metadata con
 			filtered = append(filtered, doc)
 		}
 	}
+	filtered = applyMetadataIntentRanking(effectiveQuery, filtered)
 
 	rerankApplied := false
 	fallbackReason := ""
@@ -141,6 +159,139 @@ func (s *DeterministicRetrievalService) Search(ctx context.Context, metadata con
 	return result, nil
 }
 
+func (s *DeterministicRetrievalService) searchDocuments(ctx context.Context, query contracts.RetrievalQuery) ([]contracts.RetrievalDocument, string, error) {
+	effectiveQuery := strings.TrimSpace(query.Text)
+	rewriteApplied := false
+	if s.queryRewriter != nil {
+		rewritten, err := s.queryRewriter.RewriteQuery(ctx, query.TenantID, query.Text)
+		if err != nil {
+			logging.Logger.Warn(
+				"search.step.query_rewrite.fallback",
+				zap.String("tenantID", string(query.TenantID)),
+				zap.String("requestID", query.RequestID),
+				zap.Error(err),
+			)
+		} else if trimmed := strings.TrimSpace(rewritten); trimmed != "" {
+			logging.Logger.Info(
+				"search.step.query_rewrite.done",
+				zap.String("tenantID", string(query.TenantID)),
+				zap.String("requestID", query.RequestID),
+				zap.String("originalQuery", query.Text),
+				zap.String("rewrittenQuery", trimmed),
+			)
+			effectiveQuery = trimmed
+			rewriteApplied = true
+		}
+	}
+	if expanded := buildHeuristicRetrievalQuery(query.Text, effectiveQuery); expanded != effectiveQuery {
+		logging.Logger.Info(
+			"search.step.query_rewrite.heuristic_applied",
+			zap.String("tenantID", string(query.TenantID)),
+			zap.String("requestID", query.RequestID),
+			zap.Bool("rewriteApplied", rewriteApplied),
+			zap.String("effectiveQuery", expanded),
+		)
+		effectiveQuery = expanded
+	}
+	if embedSearch, ok := s.searcher.(vectorEmbeddingSearcher); ok && s.embedder != nil {
+		vectors, err := s.embedder.Embed(ctx, query.TenantID, []string{effectiveQuery})
+		if err != nil {
+			return nil, effectiveQuery, fmt.Errorf("query embedding failed: %w", err)
+		}
+		firstDim := 0
+		if len(vectors) > 0 {
+			firstDim = len(vectors[0])
+		}
+		logging.Logger.Info(
+			"search.step.embedding.response",
+			zap.String("tenantID", string(query.TenantID)),
+			zap.String("requestID", query.RequestID),
+			zap.Int("vectorCount", len(vectors)),
+			zap.Int("firstVectorDim", firstDim),
+		)
+		if len(vectors) != 1 || len(vectors[0]) == 0 {
+			return nil, effectiveQuery, errors.New("query embedding failed: empty embedding vector")
+		}
+		docs, err := embedSearch.SearchByEmbedding(ctx, query.TenantID, vectors[0], query.TopK)
+		return docs, effectiveQuery, err
+	}
+	docs, err := s.searcher.Search(ctx, query.TenantID, effectiveQuery, query.TopK)
+	return docs, effectiveQuery, err
+}
+
+func buildHeuristicRetrievalQuery(originalQuery string, effectiveQuery string) string {
+	base := strings.TrimSpace(effectiveQuery)
+	if base == "" {
+		base = strings.TrimSpace(originalQuery)
+	}
+	if base == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(originalQuery + " " + base)
+	extra := make([]string, 0, 16)
+
+	if strings.Contains(lower, "education") || strings.Contains(lower, "educational") || strings.Contains(lower, "qualification") {
+		extra = append(extra,
+			"academic qualification",
+			"degree",
+			"university",
+			"college",
+			"institute",
+			"bachelor",
+			"master",
+		)
+	}
+	if strings.Contains(lower, "cgpa") || strings.Contains(lower, "gpa") {
+		extra = append(extra,
+			"cgpa",
+			"gpa",
+			"grade point",
+			"score",
+			"academic performance",
+		)
+	}
+
+	identityTerms := tokenizeIdentityTerms(originalQuery)
+	for _, term := range identityTerms {
+		extra = append(extra, term)
+	}
+
+	if len(extra) == 0 {
+		return base
+	}
+	seen := map[string]struct{}{}
+	for _, token := range strings.Fields(strings.ToLower(base)) {
+		seen[token] = struct{}{}
+	}
+	augmented := base
+	for _, phrase := range extra {
+		phrase = strings.TrimSpace(phrase)
+		if phrase == "" {
+			continue
+		}
+		phraseTokens := strings.Fields(strings.ToLower(phrase))
+		alreadyCovered := true
+		for _, tok := range phraseTokens {
+			if _, ok := seen[tok]; !ok {
+				alreadyCovered = false
+				break
+			}
+		}
+		if alreadyCovered {
+			continue
+		}
+		augmented += " " + phrase
+		for _, tok := range phraseTokens {
+			seen[tok] = struct{}{}
+		}
+	}
+	if len(augmented) > 512 {
+		return augmented[:512]
+	}
+	return augmented
+}
+
 func (s *DeterministicRetrievalService) Rerank(ctx context.Context, metadata contracts.RequestMetadata, req contracts.RerankRequest) ([]contracts.RerankCandidate, error) {
 	if err := metadata.Validate(); err != nil {
 		return nil, contracts.WrapValidationErr("request_metadata", err)
@@ -173,6 +324,9 @@ func (s *DeterministicRetrievalService) Rerank(ctx context.Context, metadata con
 }
 
 func (s *DeterministicRetrievalService) rerankDocuments(ctx context.Context, query contracts.RetrievalQuery, docs []contracts.RetrievalDocument) ([]contracts.RetrievalDocument, error) {
+	if s.reranker == nil {
+		return docs, nil
+	}
 	candidates := make([]contracts.RerankCandidate, 0, len(docs))
 	limit := len(docs)
 	if s.rerankTopK < limit {
@@ -269,4 +423,122 @@ func buildCitations(docs []contracts.RetrievalDocument) []string {
 		citations = append(citations, "doc:"+doc.DocumentID)
 	}
 	return citations
+}
+
+func applyMetadataIntentRanking(queryText string, docs []contracts.RetrievalDocument) []contracts.RetrievalDocument {
+	if len(docs) < 2 {
+		return docs
+	}
+	queryTerms := tokenizeIdentityTerms(queryText)
+	if len(queryTerms) == 0 {
+		return docs
+	}
+
+	knownIdentityTerms := map[string]struct{}{}
+	for _, doc := range docs {
+		for _, term := range documentIdentityTerms(doc) {
+			knownIdentityTerms[term] = struct{}{}
+		}
+	}
+
+	targeted := map[string]struct{}{}
+	for _, term := range queryTerms {
+		if _, ok := knownIdentityTerms[term]; ok {
+			targeted[term] = struct{}{}
+		}
+	}
+	if len(targeted) == 0 {
+		return docs
+	}
+
+	ordered := make([]contracts.RetrievalDocument, len(docs))
+	copy(ordered, docs)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		leftMatches := countIdentityMatches(ordered[i], targeted)
+		rightMatches := countIdentityMatches(ordered[j], targeted)
+		if leftMatches == rightMatches {
+			return ordered[i].Score > ordered[j].Score
+		}
+		return leftMatches > rightMatches
+	})
+	return ordered
+}
+
+func countIdentityMatches(doc contracts.RetrievalDocument, targeted map[string]struct{}) int {
+	terms := documentIdentityTerms(doc)
+	if len(terms) == 0 {
+		return 0
+	}
+	matches := 0
+	for _, term := range terms {
+		if _, ok := targeted[term]; ok {
+			matches++
+		}
+	}
+	return matches
+}
+
+func documentIdentityTerms(doc contracts.RetrievalDocument) []string {
+	terms := make([]string, 0, 16)
+	if doc.SourceURI != "" {
+		terms = append(terms, tokenizeIdentityTerms(path.Base(doc.SourceURI))...)
+	}
+	for _, key := range []string{"person_hint", "file_name", "relative_path", "source_uri", "object_key"} {
+		if doc.Metadata != nil {
+			if value := doc.Metadata[key]; strings.TrimSpace(value) != "" {
+				terms = append(terms, tokenizeIdentityTerms(value)...)
+			}
+		}
+	}
+	if len(terms) == 0 {
+		return nil
+	}
+	set := map[string]struct{}{}
+	out := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if _, seen := set[term]; seen {
+			continue
+		}
+		set[term] = struct{}{}
+		out = append(out, term)
+	}
+	return out
+}
+
+func tokenizeIdentityTerms(input string) []string {
+	if strings.TrimSpace(input) == "" {
+		return nil
+	}
+	stopWords := map[string]struct{}{
+		"resume": {}, "cv": {}, "pdf": {}, "skills": {}, "skill": {}, "top": {}, "show": {}, "list": {},
+		"what": {}, "who": {}, "for": {}, "of": {}, "the": {}, "and": {}, "with": {}, "from": {},
+		"candidate": {}, "profile": {}, "about": {}, "document": {}, "documents": {},
+	}
+	var b strings.Builder
+	for _, r := range input {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) {
+			b.WriteRune(unicode.ToLower(r))
+			continue
+		}
+		b.WriteByte(' ')
+	}
+	words := strings.Fields(b.String())
+	out := make([]string, 0, len(words))
+	for _, word := range words {
+		if _, excluded := stopWords[word]; excluded {
+			continue
+		}
+		allDigits := true
+		for _, ch := range word {
+			if ch < '0' || ch > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits || len(word) < 3 {
+			continue
+		}
+		out = append(out, word)
+	}
+	return out
 }

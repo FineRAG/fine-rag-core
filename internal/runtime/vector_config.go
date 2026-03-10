@@ -13,6 +13,7 @@ type VectorConfig struct {
 	Collection string
 	Username   string
 	Password   string
+	Token      string
 	TLS        bool
 }
 
@@ -32,6 +33,7 @@ func LoadVectorConfigFromEnv(lookupEnv func(string) (string, bool)) VectorConfig
 		Collection: strings.TrimSpace(getEnv(lookupEnv, "FINE_RAG_MILVUS_COLLECTION")),
 		Username:   strings.TrimSpace(getEnv(lookupEnv, "FINE_RAG_MILVUS_USERNAME")),
 		Password:   strings.TrimSpace(getEnv(lookupEnv, "FINE_RAG_MILVUS_PASSWORD")),
+		Token:      strings.TrimSpace(getEnv(lookupEnv, "FINE_RAG_MILVUS_TOKEN")),
 		TLS:        tls,
 	}
 }
@@ -61,6 +63,13 @@ func (c VectorConfig) Validate() error {
 
 func (c VectorConfig) RedactedPassword() string {
 	if strings.TrimSpace(c.Password) == "" {
+		return ""
+	}
+	return "REDACTED"
+}
+
+func (c VectorConfig) RedactedToken() string {
+	if strings.TrimSpace(c.Token) == "" {
 		return ""
 	}
 	return "REDACTED"

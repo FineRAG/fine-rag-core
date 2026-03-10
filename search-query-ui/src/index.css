@@ -66,6 +66,12 @@ body {
   padding: 1rem;
 }
 
+.login-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 label {
   display: grid;
   gap: 0.3rem;

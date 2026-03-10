@@ -3,36 +3,45 @@ package main
 import (
 	"context"
 	"database/sql"
-	"log"
+	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"enterprise-go-rag/internal/backend"
-	"enterprise-go-rag/internal/repository"
+	"enterprise-go-rag/internal/logging"
 
 	_ "github.com/lib/pq"
+	"go.uber.org/zap"
 )
 
 func main() {
+	if err := logging.Init(); err != nil {
+		panic("failed to initialize zap logger: " + err.Error())
+	}
+	defer logging.Sync()
+
 	cfg := backend.ConfigFromEnv()
 
 	db, auditRepo, vectorIndex, retrievalSvc, err := backend.BuildRuntimeDependencies()
 	if err != nil {
-		log.Fatalf("failed to initialize runtime dependencies: %v", err)
+		logging.Logger.Fatal("failed to initialize runtime dependencies", zap.Error(err))
 	}
 	defer db.Close()
 
 	if err := applyMigrations(context.Background(), db); err != nil {
-		log.Fatalf("failed to apply migrations: %v", err)
+		logging.Logger.Fatal("failed to apply migrations", zap.Error(err))
 	}
 
 	srv, err := backend.NewServer(cfg, db, auditRepo, retrievalSvc, vectorIndex)
 	if err != nil {
-		log.Fatalf("failed to create server: %v", err)
+		logging.Logger.Fatal("failed to create server", zap.Error(err))
 	}
 	if err := srv.EnsureBootstrapData(context.Background()); err != nil {
-		log.Fatalf("failed to ensure bootstrap data: %v", err)
+		logging.Logger.Fatal("failed to ensure bootstrap data", zap.Error(err))
 	}
 
 	httpServer := &http.Server{
@@ -41,14 +50,45 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Printf("finerag backend listening on %s", cfg.Addr)
+	logging.Logger.Info("finerag backend listening", zap.String("addr", cfg.Addr))
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server failed: %v", err)
+		logging.Logger.Fatal("server failed", zap.Error(err))
 	}
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {
-	runner := repository.MigrationRunner{Filesystem: os.DirFS("migrations"), Dir: "."}
-	_, err := runner.Apply(ctx, db)
-	return err
+	patterns := []string{"migrations/*.sql", "/app/migrations/*.sql"}
+	files := make([]string, 0, 8)
+	seen := map[string]struct{}{}
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			if _, ok := seen[m]; ok {
+				continue
+			}
+			seen[m] = struct{}{}
+			files = append(files, m)
+		}
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("migration files not found in expected patterns: %v", patterns)
+	}
+	sort.Strings(files)
+
+	for _, path := range files {
+		sqlBytes, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, string(sqlBytes)); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "already exists") || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+				continue
+			}
+			return fmt.Errorf("apply migration %s: %w", path, err)
+		}
+	}
+	return nil
 }

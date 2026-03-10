@@ -20,6 +20,9 @@ func BuildVectorAdapters(cfg VectorConfig) (contracts.VectorIndex, contracts.Vec
 			Endpoint:   cfg.Endpoint,
 			Database:   cfg.Database,
 			Collection: cfg.Collection,
+			Username:   cfg.Username,
+			Password:   cfg.Password,
+			Token:      cfg.Token,
 			TLS:        cfg.TLS,
 		})
 		if err != nil {

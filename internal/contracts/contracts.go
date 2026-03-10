@@ -451,6 +451,7 @@ type RetrievalDocument struct {
 	Content    string
 	Score      float64
 	SourceURI  string
+	Metadata   map[string]string
 }
 
 type RetrievalTrace struct {
@@ -628,6 +629,14 @@ type AuditEventRepository interface {
 
 type VectorSearcher interface {
 	Search(ctx context.Context, tenantID TenantID, queryText string, topK int) ([]RetrievalDocument, error)
+}
+
+type VectorEmbeddingSearcher interface {
+	SearchByEmbedding(ctx context.Context, tenantID TenantID, queryEmbedding []float32, topK int) ([]RetrievalDocument, error)
+}
+
+type QueryRewriter interface {
+	RewriteQuery(ctx context.Context, tenantID TenantID, originalQuery string) (string, error)
 }
 
 type Reranker interface {

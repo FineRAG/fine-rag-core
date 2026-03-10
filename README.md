@@ -1,133 +1,201 @@
-# 🚀 FineR (Fine-RAG)
+# FineR (Fine-RAG)
 
-### *Fine-tuned Intelligence. Industrial-Strength Reliability.*
+FineR is an enterprise RAG platform built in Go for teams that need speed, control, and trust in production AI systems.
 
-**FineR** is the definitive, high-velocity RAG framework engineered in Go for the modern enterprise. While others are still debugging Python scripts, **FineR** is already serving high-accuracy, governed knowledge at scale.
+It is designed to reduce rework across data engineering, platform, security, and AI teams by combining governed ingestion, high-throughput retrieval, and strict access controls in one stack.
 
-By treating data as a high-value asset rather than a raw dump, FineR eliminates the "Garbage In, Garbage Out" (GIGO) cycle with a robust, governed knowledge supply chain.
+## Why Enterprises Choose FineR
 
----
+FineR is built to eliminate common enterprise pain:
 
-## 💎 The FineR Advantage
+- Rebuilding pipelines every quarter because data quality drifts.
+- Spending engineering time debugging weak retrieval caused by unclean documents.
+- Retrofitting security controls after launch.
+- Handling incidents caused by tenant or policy boundary mistakes.
 
-### ⚡ **Elite Performance & Extreme Throughput**
+FineR addresses this with a single operational model:
 
-Built on the Go concurrency model, FineR is designed to handle enterprise traffic without breaking a sweat.
+- Clean and normalize data before embedding.
+- Persist metadata that improves filtering and routing.
+- Enforce tenant and access boundaries at query time.
+- Keep governance, traceability, and observability in the request path.
 
-* **High Throughput:** Engineered for **300+ Steady RPS** with a burst ceiling of **600 RPS**.
-* **Sub-Second Latency:** Achieve **p95 retrieval in <800ms**.
-* **Operational Efficiency:** Drastically lower your TCO (Total Cost of Ownership) compared to resource-heavy Python frameworks.
+## Business Impact
 
-### 🛡️ **Governed Ingestion (The "Fine" in FineR)**
+- Faster rollout: one stack for ingestion, retrieval, and secure query APIs.
+- Less rework: standardized pipeline for cleaning, chunking, embedding, and indexing.
+- Better answer quality: metadata-aware retrieval with rerank support and grounded generation.
+- Lower risk: policy checks and protection controls are built in from day 1.
+- Better cost control: reduced wasted tokens through cleaner context and stricter retrieval inputs.
 
-Don't just ingest data—curate it. FineR’s ingestion engine is a high-integrity pipeline that ensures only the highest quality knowledge enters your system.
+## Built for Performance and Scale
 
-* **Deep Cleaning & Filtering:** Automatic noise reduction, whitespace normalization, and boilerplate removal.
-* **Semantic Deduplication:** Prevent redundant embeddings and save on storage costs.
-* **PII Masking:** Enterprise-grade PII redaction (SSNs, emails, credentials) out of the box.
-* **Multi-Modal Mastery:** Native support for Text, Images, and Audio via a unified blob handler.
+- Go backend optimized for concurrent, high-throughput request handling.
+- Milvus-backed vector retrieval for scalable semantic search.
+- Chunked ingestion pipeline built for large document volumes.
+- Streaming search API for responsive UX under load.
+- Container-native architecture for horizontal scaling in cloud or on-prem environments.
 
-### 🔐 **Fortified Multi-Tenancy**
+## Trust, Security, and Data Protection by Default
 
-FineR was built for SaaS and large-scale organizational deployments.
+- Multi-tenant isolation with mandatory tenant context.
+- Layered access model with RBAC and ABAC-ready enforcement points.
+- Governance policies for restricted data and residency-sensitive sources.
+- Metadata-driven filtering to prevent cross-domain leakage.
+- Built-in PII handling path with redaction/anonymization policy hooks.
+- Audit-friendly traces and request-level diagnostics.
 
-* **Logical Namespace Isolation:** Secure, mandatory tenant-id context across all layers—zero risk of data leakage.
-* **Resource Quotas:** Granular rate limiting and cost attribution per tenant.
-* **Audit-Ready:** 180-day audit retention and 90-day cost tracking built into the architecture.
+## Architecture Snapshot
 
-### 🧩 **Total Sovereignty (Zero Vendor Lock-In)**
+- Backend: Go (`cmd/finerag-backend`)
+- Vector store: Milvus
+- Object store: MinIO
+- Database: PostgreSQL
+- Model gateway: Portkey
+- LLM/Embedding providers: OpenRouter-configured models
+- Ingestion UI: `ingestion-dashboard-ui` for governed upload/index flow
+- Search UI: `search-query-ui` for search and stream validation
 
-Your data, your infrastructure, your choice. FineR uses an **Interface-First Design** that lets you swap components as your business evolves.
+## Start the Stack Locally
 
-* **Any Cloud/On-Prem:** Deploy on AWS, Azure, GCP, or your private data center using Docker.
-* **Modular Storage:** Defaulted to **Milvus** for vectors and **MinIO** for blobs—swappable via simple Go interfaces.
-* **AI Flexibility:** Powered by **Qwen3-Embedding** and **Portkey** gateway, giving you the power to switch LLM providers (OpenAI, Gemini, Anthropic) in seconds.
+### Prerequisites
 
----
+- Docker and Docker Compose plugin
+- Go toolchain (for local tests/build)
+- `secrets/*.txt` files present (already expected by compose)
 
-## 🏗️ The Tech Stack (2026 Standard)
-
-| Layer | Component | Advantage |
-| --- | --- | --- |
-| **Engine** | **Golang 1.22+** | Type-safety, memory efficiency, and native concurrency. |
-| **Vector DB** | **Milvus** | Distributed, high-availability vector indexing. |
-| **Embeddings** | **Qwen3-Embedding-4B** | State-of-the-art open-source accuracy (Sidecar). |
-| **Gateway** | **Portkey** | Resilient LLM routing and failover orchestration. |
-| **Observability** | **OTel + Grafana** | Full-stack transparency into costs and latency. |
-| **Inference** | **Managed Rerankers** | Cross-encoder precision for top-tier retrieval. |
-
----
-
-## 🚀 Getting Started
-
-FineR is optimized for rapid onboarding with a clean, tenant-centric UI.
-
-### 1. Deploy the Engine
-
-```bash
-# Clone and spin up the FineR stack
-git clone https://github.com/your-org/finer
-docker-compose up -d
-
-```
-
-### 2. Onboard a Tenant
-
-Access the FineR Admin UI to create a tenant, set a 2 RPS quota, and generate a secure API key.
-
-### 3. Ingest Knowledge
-
-Use the **Governed Upload Dashboard** to drop folders or files. FineR will profile, clean, and index them automatically.
-
-### 4. Query with Confidence
+### Launch
 
 ```bash
-curl -X POST https://api.finer.io/v1/search \
-  -H "X-Tenant-ID: alpha-corp" \
-  -H "Authorization: Bearer ${FINER_API_KEY}" \
-  -d '{"query": "Summarize our latest security compliance audit."}'
-
+docker compose -f docker-compose.yml up -d --build
 ```
 
-### 5. One-Command Remote Stack + Local UI Tunnel
+Core local endpoints:
 
-Use the helper script to deploy/sync the full stack to EC2 and expose both UIs locally via SSH tunnel.
+- Backend API: `http://localhost:18080`
+- Ingestion Dashboard: `http://localhost:14173`
+- Search Query UI: `http://localhost:14174`
+- MinIO API: `http://localhost:19000`
+- MinIO Console: `http://localhost:19001`
+- Grafana: `http://localhost:13000`
+- Prometheus: `http://localhost:19090`
+
+To stop:
+
+```bash
+docker compose -f docker-compose.yml down
+```
+
+## Upload and Query in Minutes
+
+### 1. Login and get token
+
+```bash
+BASE_URL=http://localhost:18080
+REQ_ID=req-local-$(date +%s)
+USERNAME=$(cat secrets/finerag_bootstrap_admin_username.txt)
+API_KEY=$(cat secrets/finerag_bootstrap_admin_api_key.txt)
+
+TOKEN=$(curl -sS -X POST "$BASE_URL/api/v1/auth/login" \
+  -H "Content-Type: application/json" \
+  -H "X-Request-ID: $REQ_ID" \
+  -d "{\"username\":\"$USERNAME\",\"apiKey\":\"$API_KEY\"}" | \
+  python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+```
+
+### 2. Resolve tenant
+
+```bash
+TENANT_ID=$(curl -sS "$BASE_URL/api/v1/tenants" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Request-ID: $REQ_ID" | \
+  python3 -c 'import json,sys;d=json.load(sys.stdin);print(d[0]["tenantId"])')
+```
+
+### 3. Presign upload
+
+```bash
+FILE_PATH=./Shafeeq-Resume-Mar-2026.pdf
+FILE_NAME=$(basename "$FILE_PATH")
+FILE_SIZE=$(wc -c < "$FILE_PATH" | tr -d ' ')
+
+PRESIGN_JSON=$(curl -sS -X POST "$BASE_URL/api/v1/uploads/presign" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-ID: $TENANT_ID" \
+  -H "X-Request-ID: $REQ_ID" \
+  -d "{\"files\":[{\"name\":\"$FILE_NAME\",\"size\":$FILE_SIZE,\"type\":\"application/pdf\",\"relativePath\":\"$FILE_NAME\"}]}")
+
+UPLOAD_URL=$(printf %s "$PRESIGN_JSON" | python3 -c 'import json,sys;j=json.load(sys.stdin);print(j["uploads"][0]["uploadUrl"])')
+OBJECT_KEY=$(printf %s "$PRESIGN_JSON" | python3 -c 'import json,sys;j=json.load(sys.stdin);print(j["uploads"][0]["objectKey"])')
+```
+
+### 4. Upload and create ingestion job
+
+```bash
+curl -sS -X PUT "$UPLOAD_URL" -H "Content-Type: application/pdf" --data-binary @"$FILE_PATH" > /dev/null
+
+curl -sS -X POST "$BASE_URL/api/v1/ingestion/jobs" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-ID: $TENANT_ID" \
+  -H "X-Request-ID: $REQ_ID" \
+  -d "{\"sourceMode\":\"local\",\"sourceUri\":\"local://$FILE_NAME\",\"objectKeys\":[\"$OBJECT_KEY\"],\"localItems\":[{\"name\":\"$FILE_NAME\",\"size\":$FILE_SIZE,\"type\":\"application/pdf\",\"relativePath\":\"$FILE_NAME\"}]}"
+```
+
+### 5. Search
+
+```bash
+curl -sS -X POST "$BASE_URL/api/v1/search" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-ID: $TENANT_ID" \
+  -H "X-Request-ID: $REQ_ID" \
+  -d '{"queryText":"what is shafeeq email address?","topK":5}'
+```
+
+### 6. Stream search (SSE)
+
+```bash
+curl -sS -N -X POST "$BASE_URL/api/v1/search/stream" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-ID: $TENANT_ID" \
+  -H "X-Request-ID: $REQ_ID" \
+  -d '{"queryText":"what is shafeeq email address?"}'
+```
+
+## Governance and Restricted Data Controls
+
+FineR is designed for policy-sensitive enterprise environments:
+
+- Ingestion policy gates for residency, PII and data handling checks.
+- Deterministic governance decisions with audit sink support.
+- Metadata and intent-aware ranking paths to improve precision for restricted scopes.
+- Safer context construction to avoid passing unreadable/noisy payloads into generation.
+
+## Observability and Operations
+
+- Structured logs for each stage: ingestion, embedding, retrieval, rerank, and generation.
+- Debug traces for original query, retrieved vectors, LLM input, and final answer output.
+- Prometheus and Grafana included for runtime visibility.
+
+## Optional Remote Deploy and Local Tunnel
+
+To deploy/sync to EC2 and expose both UIs locally:
 
 ```bash
 ./run_stack_with_tunnel.sh
 ```
 
-Then open:
-
-- Ingestion dashboard: `http://localhost:14173`
-- Search query UI: `http://localhost:14174`
-
-Useful variants:
+Common variant:
 
 ```bash
-# Tunnel only (no redeploy)
 ./run_stack_with_tunnel.sh --skip-deploy
-
-# Custom host/key/path
-./run_stack_with_tunnel.sh --user-host ubuntu@<ec2-host> --ssh-key ~/.ssh/<key>.pem --remote-path /home/ubuntu/projects/finerag
 ```
 
----
+## Positioning Summary
 
-## 📈 Compliance & Security
+FineR is not a demo-only RAG kit. It is an enterprise operating model for secure, high-throughput, governed AI retrieval and answer generation.
 
-* **Data Residency:** Locked to your preferred region (e.g., AWS `ap-south-1`).
-* **Encryption:** TLS 1.3 in transit; AES-256 at rest.
-* **Governance:** Mandatory metadata schemas and approval workflows to maintain "Source of Truth" integrity.
-
----
-
-### **Experience the Future of Enterprise RAG.**
-
-Stop settling for slow, unmanaged AI. Deploy **FineR** and give your enterprise the high-speed, governed intelligence it deserves.
-
-**[Request a Demo]** | **[Read the Full Specs]** | **[Contribute on GitHub]**
-
----
-
-> **FineR: The Fine-Tuned Edge of Enterprise Knowledge.**
+If your teams need a platform that is fast to launch, safe by default, and scalable without recurring rework, FineR is built for that exact mandate.

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -18,6 +20,16 @@ import (
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 )
+
+type testLLMAnswerGenerator struct{}
+
+func (testLLMAnswerGenerator) GenerateAnswer(_ context.Context, query string, contextText string) (string, error) {
+	trimmedContext := strings.TrimSpace(contextText)
+	if trimmedContext == "" {
+		return "", fmt.Errorf("empty context")
+	}
+	return "answer for: " + strings.TrimSpace(query), nil
+}
 
 func newTestServer(t *testing.T) (*Server, sqlmock.Sqlmock, *vectorstub.Adapter) {
 	t.Helper()
@@ -47,6 +59,7 @@ func newTestServer(t *testing.T) (*Server, sqlmock.Sqlmock, *vectorstub.Adapter)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
+	srv.llm = testLLMAnswerGenerator{}
 	return srv, mock, adapter
 }
 
@@ -94,6 +107,87 @@ func TestLoginWithPasswordReturnsToken(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations failed: %v", err)
+	}
+}
+
+func TestExtractPDFFlateStreamsNoPanicOnUnicodePayload(t *testing.T) {
+	payload := append([]byte("\xC4\xB0"), []byte("stream\nnot-zlib\nendstream")...)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("extractPDFFlateStreams panicked: %v", r)
+		}
+	}()
+
+	streams := extractPDFFlateStreams(payload)
+	if streams == nil {
+		t.Fatalf("expected non-nil streams slice")
+	}
+}
+
+func TestToASCIILowerPreservesLength(t *testing.T) {
+	in := append([]byte{0xC4, 0xB0}, []byte("STREAM\nxx\nENDSTREAM")...)
+	out := toASCIILower(in)
+	if len(out) != len(in) {
+		t.Fatalf("expected same length, got in=%d out=%d", len(in), len(out))
+	}
+	if string(out[2:8]) != "stream" {
+		t.Fatalf("expected ASCII lower conversion to apply, got %q", string(out[2:8]))
+	}
+}
+
+func TestExtractPDFSearchableText_FromAttachedResume(t *testing.T) {
+	payload, err := os.ReadFile("../../RounakPoddar-Resume.pdf")
+	if err != nil {
+		t.Fatalf("read resume fixture: %v", err)
+	}
+	text := strings.ToLower(extractPDFSearchableText(payload))
+	if text == "" {
+		t.Fatalf("expected extracted text, got empty")
+	}
+	if !strings.Contains(text, "rounak") && !strings.Contains(text, "poddar") && !strings.Contains(text, "gmail") {
+		t.Fatalf("expected resume-identifying text in extraction, got: %.200q", text)
+	}
+}
+
+func TestExtractPDFSearchableText_FromShafeeqResume(t *testing.T) {
+	payload, err := os.ReadFile("../../Shafeeq-Resume-Mar-2026.pdf")
+	if err != nil {
+		t.Fatalf("read shafeeq resume fixture: %v", err)
+	}
+	text := strings.ToLower(extractPDFSearchableText(payload))
+	if text == "" {
+		t.Fatalf("expected extracted text, got empty")
+	}
+	if !strings.Contains(text, "shafeeq") && !strings.Contains(text, "@") && !strings.Contains(text, "gmail") {
+		t.Fatalf("expected shafeeq resume-identifying text in extraction, got: %.200q", text)
+	}
+}
+
+func TestNormalizeExtractedTextCompactsSpacedGlyphRuns(t *testing.T) {
+	raw := "S H A F E E Q U L I S L A M i a m s h a f e e q u l @ g m a i l . c o m"
+	normalized := normalizeExtractedText(raw)
+	lower := strings.ToLower(normalized)
+	if !strings.Contains(lower, "shafeequlislam") {
+		t.Fatalf("expected compacted person name, got: %q", normalized)
+	}
+	if !strings.Contains(lower, "iamshafeequl@gmail.com") {
+		t.Fatalf("expected compacted email, got: %q", normalized)
+	}
+}
+
+func TestBuildContextPartFallbackKeepsReadableChunk(t *testing.T) {
+	raw := "S H A F E E Q U L I S L A M + 9 1 - 9 0 4 5 6 2 7 6 0 2 # i a m s h a f e e q u l @ g m a i l . c o m"
+	got := buildContextPart("what is shafeeq email", raw)
+	if strings.TrimSpace(got) == "" {
+		t.Fatalf("expected non-empty context part for readable chunk")
+	}
+	lower := strings.ToLower(got)
+	if !(strings.Contains(lower, "shaf") || strings.Contains(lower, "s h a f")) {
+		t.Fatalf("expected preserved contact signal, got: %q", got)
+	}
+	if !strings.Contains(lower, "@") {
+		t.Fatalf("expected preserved email marker, got: %q", got)
 	}
 }
 
@@ -298,6 +392,9 @@ func TestSearchStreamReturnsDoneEvent(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `"type":"done"`) {
 		t.Fatalf("expected done event in stream, got: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"topVectors"`) || !strings.Contains(rr.Body.String(), `"type":"top_vectors"`) {
+		t.Fatalf("expected top vectors event/payload in stream, got: %s", rr.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations failed: %v", err)

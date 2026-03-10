@@ -36,6 +36,12 @@ function App() {
 
   const canLogin = useMemo(() => username.trim() && apiKeyInput.trim(), [username, apiKeyInput])
 
+  function fillDemoUser() {
+	if (!username.trim()) {
+		setUsername('admin')
+	}
+  }
+
   function clearSession(message: string, expired = false) {
     setAuthStatus(expired ? 'expired' : 'logged_out')
     setAuthSession(null)
@@ -182,24 +188,28 @@ function App() {
 
       {authStatus !== 'authenticated' || !authSession ? (
         <section className="login-card" data-testid="login-gate">
-          <h2>Sign In</h2>
+          <h2>Sign In To Query Workspace</h2>
+          <p className="muted">Use your FineR username and password to access tenant query.</p>
           <label>
             Username
             <input data-testid="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="admin" />
           </label>
           <label>
-            API Key
+            Password
             <input
               data-testid="api-key"
               type="password"
               value={apiKeyInput}
               onChange={(event) => setApiKeyInput(event.target.value)}
-              placeholder="Enter API key"
+              placeholder="Enter password"
             />
           </label>
-          <button type="button" disabled={!canLogin || authStatus === 'authenticating'} onClick={() => void startSession()}>
-            Login
-          </button>
+          <div className="login-actions">
+            <button type="button" onClick={fillDemoUser}>Use Admin Username</button>
+            <button type="button" disabled={!canLogin || authStatus === 'authenticating'} onClick={() => void startSession()}>
+              Login
+            </button>
+          </div>
         </section>
       ) : null}
 

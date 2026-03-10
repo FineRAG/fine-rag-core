@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"enterprise-go-rag/internal/adapters/gateway/portkey"
 	"enterprise-go-rag/internal/contracts"
 	"enterprise-go-rag/internal/repository"
 	"enterprise-go-rag/internal/runtime"
@@ -31,19 +32,33 @@ import (
 )
 
 type Config struct {
-	Addr            string
-	JWTSecret       string
-	TokenTTL        time.Duration
-	AllowedOrigins  []string
-	RateLimitPerMin int
-	UploadBaseURL   string
-	MinIOEndpoint   string
-	UploadBucket    string
-	MinIOAccessKey  string
-	MinIOSecretKey  string
-	MinIORegion     string
-	PresignTTL      time.Duration
-	MaxObjectBytes  int64
+	Addr                   string
+	JWTSecret              string
+	TokenTTL               time.Duration
+	AllowedOrigins         []string
+	RateLimitPerMin        int
+	UploadBaseURL          string
+	MinIOEndpoint          string
+	UploadBucket           string
+	MinIOAccessKey         string
+	MinIOSecretKey         string
+	MinIORegion            string
+	PresignTTL             time.Duration
+	MaxObjectBytes         int64
+	GatewayProvider        string
+	PortkeyBaseURL         string
+	PortkeyAPIKey          string
+	OpenRouterKey          string
+	OpenRouterModel        string
+	EnableQueryRewrite     bool
+	QueryRewriteModel      string
+	EmbeddingModel         string
+	EmbeddingFallbackModel string
+	LLMTimeout             time.Duration
+	OpenRouterMinInterval  time.Duration
+	OpenRouterRetryMax     int
+	ChunkSizeChars         int
+	ChunkOverlapWords      int
 }
 
 type Server struct {
@@ -56,6 +71,12 @@ type Server struct {
 	limiter   *windowLimiter
 	presign   *s3.PresignClient
 	minio     *s3.Client
+	llm       llmAnswerGenerator
+	embedder  contracts.EmbeddingProvider
+}
+
+type llmAnswerGenerator interface {
+	GenerateAnswer(ctx context.Context, query string, contextText string) (string, error)
 }
 
 type authClaims struct {
@@ -99,20 +120,70 @@ func ConfigFromEnv() Config {
 			maxObjectBytes = parsed
 		}
 	}
+	llmTimeout := 12 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_LLM_TIMEOUT")); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			llmTimeout = parsed
+		}
+	}
+	openRouterMinInterval := 900 * time.Millisecond
+	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_OPENROUTER_MIN_INTERVAL")); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			openRouterMinInterval = parsed
+		}
+	}
+	openRouterRetryMax := 3
+	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_OPENROUTER_RETRY_MAX")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			openRouterRetryMax = parsed
+		}
+	}
+
+	chunkSizeChars := 900
+	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_CHUNK_SIZE_CHARS")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			chunkSizeChars = parsed
+		}
+	}
+	chunkOverlapWords := 30
+	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_CHUNK_OVERLAP_WORDS")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			chunkOverlapWords = parsed
+		}
+	}
+	enableQueryRewrite := false
+	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_ENABLE_QUERY_REWRITE")); raw != "" {
+		enableQueryRewrite = strings.EqualFold(raw, "true") || raw == "1" || strings.EqualFold(raw, "yes")
+	}
+
 	return Config{
-		Addr:            envOr("FINE_RAG_HTTP_ADDR", ":8080"),
-		JWTSecret:       envOrSecret("FINE_RAG_JWT_SECRET", ""),
-		TokenTTL:        ttl,
-		AllowedOrigins:  origins,
-		RateLimitPerMin: limit,
-		UploadBaseURL:   envOrSecret("FINE_RAG_MINIO_PUBLIC_BASE_URL", ""),
-		MinIOEndpoint:   envOrSecret("FINE_RAG_MINIO_ENDPOINT", "http://minio:9000"),
-		UploadBucket:    envOr("FINE_RAG_MINIO_BUCKET", "finerag-ingestion"),
-		MinIOAccessKey:  envOrSecret("FINE_RAG_MINIO_ACCESS_KEY", ""),
-		MinIOSecretKey:  envOrSecret("FINE_RAG_MINIO_SECRET_KEY", ""),
-		MinIORegion:     envOr("FINE_RAG_MINIO_REGION", "us-east-1"),
-		PresignTTL:      presignTTL,
-		MaxObjectBytes:  maxObjectBytes,
+		Addr:                   envOr("FINE_RAG_HTTP_ADDR", ":8080"),
+		JWTSecret:              envOrSecret("FINE_RAG_JWT_SECRET", ""),
+		TokenTTL:               ttl,
+		AllowedOrigins:         origins,
+		RateLimitPerMin:        limit,
+		UploadBaseURL:          envOrSecret("FINE_RAG_MINIO_PUBLIC_BASE_URL", ""),
+		MinIOEndpoint:          envOrSecret("FINE_RAG_MINIO_ENDPOINT", "http://minio:9000"),
+		UploadBucket:           envOr("FINE_RAG_MINIO_BUCKET", "finerag-ingestion"),
+		MinIOAccessKey:         envOrSecret("FINE_RAG_MINIO_ACCESS_KEY", ""),
+		MinIOSecretKey:         envOrSecret("FINE_RAG_MINIO_SECRET_KEY", ""),
+		MinIORegion:            envOr("FINE_RAG_MINIO_REGION", "us-east-1"),
+		PresignTTL:             presignTTL,
+		MaxObjectBytes:         maxObjectBytes,
+		GatewayProvider:        strings.ToLower(envOr("FINE_RAG_GATEWAY_PROVIDER", "stub")),
+		PortkeyBaseURL:         envOr("FINE_RAG_PORTKEY_BASE_URL", "https://api.portkey.ai"),
+		PortkeyAPIKey:          envOrSecret("FINE_RAG_PORTKEY_API_KEY", ""),
+		OpenRouterKey:          envOrSecret("FINE_RAG_OPENROUTER_API_KEY", ""),
+		OpenRouterModel:        envOr("FINE_RAG_OPENROUTER_MODEL", "@groq-key/openai/gpt-oss-120b"),
+		EnableQueryRewrite:     enableQueryRewrite,
+		QueryRewriteModel:      envOr("FINE_RAG_QUERY_REWRITE_MODEL", "@groq-key/openai/gpt-oss-20b"),
+		EmbeddingModel:         envOr("FINE_RAG_OPENROUTER_EMBEDDING_MODEL", "@openrouter-key/nvidia/llama-nemotron-embed-vl-1b-v2:free"),
+		EmbeddingFallbackModel: envOr("FINE_RAG_OPENROUTER_EMBEDDING_FALLBACK_MODEL", ""),
+		LLMTimeout:             llmTimeout,
+		OpenRouterMinInterval:  openRouterMinInterval,
+		OpenRouterRetryMax:     openRouterRetryMax,
+		ChunkSizeChars:         chunkSizeChars,
+		ChunkOverlapWords:      chunkOverlapWords,
 	}
 }
 
@@ -152,6 +223,33 @@ func NewServer(cfg Config, db *sql.DB, auditRepo contracts.AuditEventRepository,
 		o.BaseEndpoint = &internalEndpoint
 		o.UsePathStyle = true
 	})
+	var answerGenerator llmAnswerGenerator
+	var embeddingProvider contracts.EmbeddingProvider
+	if cfg.GatewayProvider == "portkey" && strings.TrimSpace(cfg.PortkeyAPIKey) != "" {
+		chatClient, chatErr := portkey.NewChatClient(portkey.ChatConfig{
+			BaseURL:       cfg.PortkeyBaseURL,
+			PortkeyAPIKey: cfg.PortkeyAPIKey,
+			OpenRouterKey: cfg.OpenRouterKey,
+			Model:         cfg.OpenRouterModel,
+			Timeout:       cfg.LLMTimeout,
+		})
+		if chatErr == nil {
+			answerGenerator = chatClient
+		}
+		embeddingClient, embeddingErr := portkey.NewEmbeddingClient(portkey.EmbeddingConfig{
+			BaseURL:       cfg.PortkeyBaseURL,
+			PortkeyAPIKey: cfg.PortkeyAPIKey,
+			OpenRouterKey: cfg.OpenRouterKey,
+			Model:         cfg.EmbeddingModel,
+			FallbackModel: cfg.EmbeddingFallbackModel,
+			Timeout:       cfg.LLMTimeout,
+			MinInterval:   cfg.OpenRouterMinInterval,
+			RetryMax:      cfg.OpenRouterRetryMax,
+		})
+		if embeddingErr == nil {
+			embeddingProvider = embeddingClient
+		}
+	}
 	return &Server{
 		cfg:       cfg,
 		db:        db,
@@ -162,6 +260,8 @@ func NewServer(cfg Config, db *sql.DB, auditRepo contracts.AuditEventRepository,
 		limiter:   newWindowLimiter(cfg.RateLimitPerMin),
 		presign:   s3.NewPresignClient(presignClient),
 		minio:     minioClient,
+		llm:       answerGenerator,
+		embedder:  embeddingProvider,
 	}, nil
 }
 
@@ -182,22 +282,36 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/ingestion/jobs/{jobId}/retry", s.withAuth(s.withTenant(http.HandlerFunc(s.handleRetryJob))))
 	mux.Handle("POST /api/v1/search", s.withAuth(s.withTenant(http.HandlerFunc(s.handleSearch))))
 	mux.Handle("POST /api/v1/search/stream", s.withAuth(s.withTenant(http.HandlerFunc(s.handleSearchStream))))
+	mux.Handle("POST /api/v1/tenants/{tenantId}/purge", s.withAuth(s.withTenant(http.HandlerFunc(s.handlePurgeTenantData))))
 	return s.withAccessLog(s.withCORS(s.withRequestID(mux)))
 }
 
 func (s *Server) withRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		// Prefer reverse-proxy supplied request IDs for cross-service tracing.
+		requestID := strings.TrimSpace(r.Header.Get("X-Request-Id"))
 		if requestID == "" {
-			requestID = strings.TrimSpace(r.Header.Get("X-Request-Id"))
+			requestID = strings.TrimSpace(r.Header.Get("X-Request-ID"))
 		}
 		if requestID == "" {
-			requestID = "req-" + randomString(12)
+			requestID = randomUUIDv4Like()
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func randomUUIDv4Like() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "req-" + randomString(16)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16],
+	)
 }
 
 type accessLogWriter struct {
@@ -324,7 +438,37 @@ func BuildRuntimeDependencies() (*sql.DB, contracts.AuditEventRepository, contra
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	return db, auditRepo, index, retrieval.NewDeterministicRetrievalService(searcher, reranker, retrieval.Config{}), nil
+	serverCfg := ConfigFromEnv()
+	var embedder contracts.EmbeddingProvider
+	var queryRewriter contracts.QueryRewriter
+	if serverCfg.GatewayProvider == "portkey" && strings.TrimSpace(serverCfg.PortkeyAPIKey) != "" {
+		embeddingClient, embeddingErr := portkey.NewEmbeddingClient(portkey.EmbeddingConfig{
+			BaseURL:       serverCfg.PortkeyBaseURL,
+			PortkeyAPIKey: serverCfg.PortkeyAPIKey,
+			OpenRouterKey: serverCfg.OpenRouterKey,
+			Model:         serverCfg.EmbeddingModel,
+			FallbackModel: serverCfg.EmbeddingFallbackModel,
+			Timeout:       serverCfg.LLMTimeout,
+			MinInterval:   serverCfg.OpenRouterMinInterval,
+			RetryMax:      serverCfg.OpenRouterRetryMax,
+		})
+		if embeddingErr == nil {
+			embedder = embeddingClient
+		}
+		if serverCfg.EnableQueryRewrite {
+			rewriteClient, rewriteErr := portkey.NewChatClient(portkey.ChatConfig{
+				BaseURL:       serverCfg.PortkeyBaseURL,
+				PortkeyAPIKey: serverCfg.PortkeyAPIKey,
+				OpenRouterKey: serverCfg.OpenRouterKey,
+				Model:         serverCfg.QueryRewriteModel,
+				Timeout:       serverCfg.LLMTimeout,
+			})
+			if rewriteErr == nil {
+				queryRewriter = rewriteClient
+			}
+		}
+	}
+	return db, auditRepo, index, retrieval.NewDeterministicRetrievalService(searcher, reranker, retrieval.Config{EmbeddingProvider: embedder, QueryRewriter: queryRewriter}), nil
 }
 
 func (s *Server) EnsureBootstrapData(ctx context.Context) error {

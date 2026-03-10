@@ -16,7 +16,7 @@ export function getApiBaseUrl(): string {
 }
 
 function assertAuthSession(session: AuthSession | null | undefined): asserts session is AuthSession {
-  if (!session?.token || !session.requestId) {
+  if (!session?.token) {
     throw new Error('authenticated session is required')
   }
 }
@@ -74,7 +74,6 @@ export async function listTenants(session: AuthSession): Promise<TenantRecord[]>
     headers: {
       Authorization: `Bearer ${session.token}`,
       'Content-Type': 'application/json',
-      'X-Request-ID': session.requestId,
     },
   })
 
@@ -93,7 +92,6 @@ export function buildTenantHeaders(session: TenantSession): HeadersInit {
   return {
     Authorization: `Bearer ${session.token}`,
     'Content-Type': 'application/json',
-    'X-Request-ID': session.requestId,
     'X-Tenant-ID': session.tenantId,
   }
 }
