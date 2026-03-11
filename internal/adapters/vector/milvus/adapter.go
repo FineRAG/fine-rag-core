@@ -67,7 +67,8 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	connectCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Cloud Milvus endpoints can take longer than local instances during TLS+auth handshake.
+	connectCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	cli, err := mclient.NewClient(connectCtx, mclient.Config{
 		Address:       address,
