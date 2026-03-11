@@ -5,14 +5,8 @@ Create the following files locally before starting the stack:
 - `postgres_user.txt`
 - `postgres_password.txt`
 - `postgres_db.txt`
-- `minio_root_user.txt`
-- `minio_root_password.txt`
-- `grafana_admin_user.txt`
-- `grafana_admin_password.txt`
 - `finerag_jwt_secret.txt`
 - `finerag_database_url.txt`
-- `finerag_minio_access_key.txt`
-- `finerag_minio_secret_key.txt`
 - `finerag_bootstrap_admin_username.txt`
 - `finerag_bootstrap_admin_password.txt`
 - `finerag_bootstrap_admin_api_key.txt`
@@ -30,3 +24,17 @@ Example DB URL format for `finerag_database_url.txt`:
 Example Milvus endpoint format for `finerag_milvus_endpoint.txt`:
 
 `<host>:443`
+
+For AWS S3-backed deployments, the backend now prefers the default AWS credential chain.
+On EC2, attach an IAM role with S3 access to the instance and set these environment variables in the runtime:
+
+- `FINE_RAG_S3_BUCKET`
+- `FINE_RAG_S3_REGION`
+
+Optional S3 overrides for non-AWS or local S3-compatible stores:
+
+- `FINE_RAG_S3_ENDPOINT`
+- `FINE_RAG_S3_ACCESS_KEY`
+- `FINE_RAG_S3_SECRET_KEY`
+- `FINE_RAG_S3_USE_PATH_STYLE`
+- `FINE_RAG_UPLOAD_PUBLIC_BASE_URL`

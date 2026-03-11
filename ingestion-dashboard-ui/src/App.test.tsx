@@ -91,7 +91,7 @@ describe('ingestion dashboard integration flow', () => {
             {
               relativePath: 'docs/doc.txt',
               objectKey: 'tenant-a/uploads/docs/doc.txt',
-              uploadUrl: 'https://minio.local/upload/doc',
+              uploadUrl: 'https://s3.local/upload/doc',
               headers: { 'Content-Type': 'text/plain' },
             },
           ],
@@ -134,7 +134,7 @@ describe('ingestion dashboard integration flow', () => {
     await screen.findByText('job-local-1')
 
     expect(fetchMock.mock.calls[5][0]).toContain('/api/v1/uploads/presign')
-    expect(fetchMock.mock.calls[6][0]).toBe('https://minio.local/upload/doc')
+      expect(fetchMock.mock.calls[6][0]).toBe('https://s3.local/upload/doc')
     expect(fetchMock.mock.calls[6][1].method).toBe('PUT')
     expect(fetchMock.mock.calls[7][0]).toContain('/api/v1/ingestion/jobs')
   })

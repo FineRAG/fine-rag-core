@@ -38,11 +38,12 @@ type Config struct {
 	AllowedOrigins         []string
 	RateLimitPerMin        int
 	UploadBaseURL          string
-	MinIOEndpoint          string
+	S3Endpoint             string
 	UploadBucket           string
-	MinIOAccessKey         string
-	MinIOSecretKey         string
-	MinIORegion            string
+	S3AccessKey            string
+	S3SecretKey            string
+	S3Region               string
+	S3UsePathStyle         bool
 	PresignTTL             time.Duration
 	MaxObjectBytes         int64
 	GatewayProvider        string
@@ -62,21 +63,55 @@ type Config struct {
 }
 
 type Server struct {
-	cfg       Config
-	db        *sql.DB
-	auditRepo contracts.AuditEventRepository
-	retrieval *retrieval.DeterministicRetrievalService
-	index     contracts.VectorIndex
-	origins   map[string]struct{}
-	limiter   *windowLimiter
-	presign   *s3.PresignClient
-	minio     *s3.Client
-	llm       llmAnswerGenerator
-	embedder  contracts.EmbeddingProvider
+	cfg         Config
+	db          *sql.DB
+	auditRepo   contracts.AuditEventRepository
+	retrieval   *retrieval.DeterministicRetrievalService
+	index       contracts.VectorIndex
+	origins     map[string]struct{}
+	limiter     *windowLimiter
+	presign     *s3.PresignClient
+	objectStore *s3.Client
+	llm         llmAnswerGenerator
+	embedder    contracts.EmbeddingProvider
 }
 
 type llmAnswerGenerator interface {
 	GenerateAnswer(ctx context.Context, query string, contextText string) (string, error)
+}
+
+func envOrAny(keys []string, fallback string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
+func envOrSecretAny(keys []string, fallback string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(envOrSecret(key, "")); value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
+func envBoolAny(keys []string, fallback bool) bool {
+	for _, key := range keys {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value == "" {
+			continue
+		}
+		switch strings.ToLower(value) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
+		}
+	}
+	return fallback
 }
 
 type authClaims struct {
@@ -106,16 +141,20 @@ func ConfigFromEnv() Config {
 	}
 	origins := splitCSV(os.Getenv("FINE_RAG_ALLOWED_ORIGINS"))
 	if len(origins) == 0 {
-		origins = []string{"https://finer.shafeeq.dev", "https://dash-finer.shafeeq.dev", "http://localhost:14173", "http://localhost:14174"}
+		origins = []string{"https://finer.shafeeq.dev", "https://dash-finer.shafeeq.dev"}
+	}
+	s3UsePathStyle := envBoolAny([]string{"FINE_RAG_S3_USE_PATH_STYLE"}, false)
+	if strings.TrimSpace(envOrSecretAny([]string{"FINE_RAG_S3_ENDPOINT"}, "")) != "" {
+		s3UsePathStyle = true
 	}
 	presignTTL := 5 * time.Minute
-	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_MINIO_PRESIGN_TTL")); raw != "" {
+	if raw := strings.TrimSpace(envOrAny([]string{"FINE_RAG_S3_PRESIGN_TTL"}, "")); raw != "" {
 		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
 			presignTTL = parsed
 		}
 	}
 	maxObjectBytes := int64(20 * 1024 * 1024)
-	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_MINIO_MAX_OBJECT_BYTES")); raw != "" {
+	if raw := strings.TrimSpace(envOrAny([]string{"FINE_RAG_S3_MAX_OBJECT_BYTES"}, "")); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
 			maxObjectBytes = parsed
 		}
@@ -162,12 +201,13 @@ func ConfigFromEnv() Config {
 		TokenTTL:               ttl,
 		AllowedOrigins:         origins,
 		RateLimitPerMin:        limit,
-		UploadBaseURL:          envOrSecret("FINE_RAG_MINIO_PUBLIC_BASE_URL", ""),
-		MinIOEndpoint:          envOrSecret("FINE_RAG_MINIO_ENDPOINT", "http://minio:9000"),
-		UploadBucket:           envOr("FINE_RAG_MINIO_BUCKET", "finerag-ingestion"),
-		MinIOAccessKey:         envOrSecret("FINE_RAG_MINIO_ACCESS_KEY", ""),
-		MinIOSecretKey:         envOrSecret("FINE_RAG_MINIO_SECRET_KEY", ""),
-		MinIORegion:            envOr("FINE_RAG_MINIO_REGION", "us-east-1"),
+		UploadBaseURL:          envOrSecretAny([]string{"FINE_RAG_UPLOAD_PUBLIC_BASE_URL", "FINE_RAG_S3_PUBLIC_BASE_URL"}, ""),
+		S3Endpoint:             envOrSecretAny([]string{"FINE_RAG_S3_ENDPOINT"}, ""),
+		UploadBucket:           envOrAny([]string{"FINE_RAG_S3_BUCKET"}, "finerag-ingestion"),
+		S3AccessKey:            envOrSecretAny([]string{"FINE_RAG_S3_ACCESS_KEY"}, ""),
+		S3SecretKey:            envOrSecretAny([]string{"FINE_RAG_S3_SECRET_KEY"}, ""),
+		S3Region:               envOrAny([]string{"FINE_RAG_S3_REGION"}, "us-east-1"),
+		S3UsePathStyle:         s3UsePathStyle,
 		PresignTTL:             presignTTL,
 		MaxObjectBytes:         maxObjectBytes,
 		GatewayProvider:        strings.ToLower(envOr("FINE_RAG_GATEWAY_PROVIDER", "stub")),
@@ -191,8 +231,8 @@ func NewServer(cfg Config, db *sql.DB, auditRepo contracts.AuditEventRepository,
 	if strings.TrimSpace(cfg.JWTSecret) == "" {
 		return nil, errors.New("FINE_RAG_JWT_SECRET is required")
 	}
-	if strings.TrimSpace(cfg.MinIOAccessKey) == "" || strings.TrimSpace(cfg.MinIOSecretKey) == "" {
-		return nil, errors.New("FINE_RAG_MINIO_ACCESS_KEY and FINE_RAG_MINIO_SECRET_KEY are required")
+	if strings.TrimSpace(cfg.UploadBucket) == "" {
+		return nil, errors.New("FINE_RAG_S3_BUCKET is required")
 	}
 	origins := map[string]struct{}{}
 	for _, origin := range cfg.AllowedOrigins {
@@ -201,27 +241,29 @@ func NewServer(cfg Config, db *sql.DB, auditRepo contracts.AuditEventRepository,
 		}
 	}
 	publicEndpoint := strings.TrimRight(cfg.UploadBaseURL, "/")
-	if publicEndpoint == "" {
-		publicEndpoint = "http://localhost:19000"
+	internalEndpoint := strings.TrimRight(cfg.S3Endpoint, "/")
+	loadOptions := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(cfg.S3Region)}
+	if strings.TrimSpace(cfg.S3AccessKey) != "" || strings.TrimSpace(cfg.S3SecretKey) != "" {
+		if strings.TrimSpace(cfg.S3AccessKey) == "" || strings.TrimSpace(cfg.S3SecretKey) == "" {
+			return nil, errors.New("FINE_RAG_S3_ACCESS_KEY and FINE_RAG_S3_SECRET_KEY must both be set when using static credentials")
+		}
+		loadOptions = append(loadOptions, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.S3AccessKey, cfg.S3SecretKey, "")))
 	}
-	internalEndpoint := strings.TrimRight(cfg.MinIOEndpoint, "/")
-	if internalEndpoint == "" {
-		internalEndpoint = "http://minio:9000"
-	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
-		awsconfig.WithRegion(cfg.MinIORegion),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.MinIOAccessKey, cfg.MinIOSecretKey, "")),
-	)
+	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), loadOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
 	presignClient := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.BaseEndpoint = &publicEndpoint
-		o.UsePathStyle = true
+		if publicEndpoint != "" {
+			o.BaseEndpoint = &publicEndpoint
+		}
+		o.UsePathStyle = cfg.S3UsePathStyle
 	})
-	minioClient := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.BaseEndpoint = &internalEndpoint
-		o.UsePathStyle = true
+	objectStoreClient := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		if internalEndpoint != "" {
+			o.BaseEndpoint = &internalEndpoint
+		}
+		o.UsePathStyle = cfg.S3UsePathStyle
 	})
 	var answerGenerator llmAnswerGenerator
 	var embeddingProvider contracts.EmbeddingProvider
@@ -251,17 +293,17 @@ func NewServer(cfg Config, db *sql.DB, auditRepo contracts.AuditEventRepository,
 		}
 	}
 	return &Server{
-		cfg:       cfg,
-		db:        db,
-		auditRepo: auditRepo,
-		retrieval: retrievalSvc,
-		index:     vectorIndex,
-		origins:   origins,
-		limiter:   newWindowLimiter(cfg.RateLimitPerMin),
-		presign:   s3.NewPresignClient(presignClient),
-		minio:     minioClient,
-		llm:       answerGenerator,
-		embedder:  embeddingProvider,
+		cfg:         cfg,
+		db:          db,
+		auditRepo:   auditRepo,
+		retrieval:   retrievalSvc,
+		index:       vectorIndex,
+		origins:     origins,
+		limiter:     newWindowLimiter(cfg.RateLimitPerMin),
+		presign:     s3.NewPresignClient(presignClient),
+		objectStore: objectStoreClient,
+		llm:         answerGenerator,
+		embedder:    embeddingProvider,
 	}, nil
 }
 

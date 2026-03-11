@@ -213,7 +213,7 @@ export async function requestPresignedUploads(
   return payload.uploads
 }
 
-export async function uploadLocalFilesToMinio(
+export async function uploadLocalFilesToS3(
   uploads: PresignedUploadItem[],
   filesByRelativePath: Map<string, File>,
 ): Promise<void> {

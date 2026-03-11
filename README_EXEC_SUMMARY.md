@@ -36,6 +36,7 @@ FineR is designed to avoid that pattern by making data protection, policy enforc
 
 ### 3. Built-In Security and Governance
 
+- Engineered layered security and governance model: tenant-scoped access paths, RBAC/ABAC enforcement, and automated PII redaction pathways to ensure zero-leakage compliance for regulated data.
 - Mandatory tenant-scoped access paths.
 - Layered protection model with RBAC and ABAC-ready enforcement points.
 - Governance policy gates for restricted data handling.
@@ -46,7 +47,7 @@ FineR is designed to avoid that pattern by making data protection, policy enforc
 
 - Go concurrency model for high throughput and predictable latency.
 - Container-native deployment model for cloud or on-prem.
-- Operational observability with logs, traces, Prometheus, and Grafana.
+- Operational observability with logs, traces, and managed Prometheus/Grafana.
 
 ## Risk and Compliance Posture
 
@@ -66,8 +67,8 @@ docker compose -f docker-compose.yml up -d --build
 Primary endpoints:
 
 - Backend API: `http://localhost:18080`
-- Ingestion UI: `http://localhost:14173`
-- Search UI: `http://localhost:14174`
+- Ingestion UI: published by `docker-compose.yml`
+- Search UI: published by `docker-compose.yml`
 
 ## Typical Flow
 

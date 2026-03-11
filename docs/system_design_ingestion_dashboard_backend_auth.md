@@ -1,4 +1,4 @@
-# System Design: Ingestion Dashboard Backend Auth + MinIO Presigned Upload
+# System Design: Ingestion Dashboard Backend Auth + S3 Presigned Upload
 
 Date: 2026-03-09
 Status: Implementation design
@@ -9,7 +9,7 @@ Applies to: `ingestion-dashboard-ui`
 1. Replace login bootstrap (`username + apiKey + requestId`) with backend auth login (`username + password`).
 2. Use token-based auth session and internal request-id generation for all protected calls.
 3. Add tenant switcher and dashboard metrics surfaces for knowledge base + vector storage.
-4. Implement MinIO presigned upload workflow for local file/folder ingestion.
+4. Implement S3 presigned upload workflow for local file/folder ingestion.
 5. Add ingestion progress stream using SSE and merge event updates into job table.
 6. Add PWA compatibility via static manifest and service worker registration.
 
@@ -26,12 +26,12 @@ Applies to: `ingestion-dashboard-ui`
 2. `VectorStats`: vectorCount/storageBytes/updatedAt.
 3. `IngestionProgressEvent`: jobId/stage/counters/governance fields/per-file status.
 
-## Upload Flow (Presigned MinIO)
+## Upload Flow (Presigned S3)
 
 1. User selects files or folder.
 2. UI applies extension allowlist.
 3. UI requests presigned upload batch from backend.
-4. UI PUT uploads each file directly to MinIO using returned upload URL.
+4. UI PUT uploads each file directly to S3 using returned upload URL.
 5. UI submits ingestion job with uploaded object references.
 6. Backend triggers fixed pipeline (cleanup/classification/indexing).
 
@@ -58,6 +58,6 @@ Applies to: `ingestion-dashboard-ui`
 
 1. T1 Login/auth refactor (username/password only, backend token).
 2. T2 Tenant switch + KB/vector metrics surfaces.
-3. T3 Presigned MinIO upload and folder allowlist filtering.
+3. T3 Presigned S3 upload and folder allowlist filtering.
 4. T4 Ingestion progress stream + per-file counters/governance and retry.
 5. T5 PWA assets + service worker registration + tests/build validation.

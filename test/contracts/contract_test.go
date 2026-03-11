@@ -175,6 +175,10 @@ func TestContractProviderSwitchIsConfigOnly(t *testing.T) {
 		t.Fatalf("stub provider search failed: %v", err)
 	}
 
+	if os.Getenv("FINE_RAG_RUN_MILVUS_INTEGRATION") != "1" {
+		t.Skip("set FINE_RAG_RUN_MILVUS_INTEGRATION=1 to run live milvus provider switch test")
+	}
+
 	milvusCfg := runtime.VectorConfig{Provider: "milvus", Endpoint: "https://milvus.example.internal", Database: "db", Collection: "vectors", TLS: true}
 	milvusIdx, milvusSearcher, _, err := runtime.BuildVectorAdapters(milvusCfg)
 	if err != nil {

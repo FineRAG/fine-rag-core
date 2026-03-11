@@ -33,6 +33,10 @@ func TestVectorProviderSwitchStubAndMilvus(t *testing.T) {
 		t.Fatalf("unexpected stub provider wiring: provider=%s", provider)
 	}
 
+	if os.Getenv("FINE_RAG_RUN_MILVUS_INTEGRATION") != "1" {
+		t.Skip("set FINE_RAG_RUN_MILVUS_INTEGRATION=1 to run live milvus wiring test")
+	}
+
 	milvusCfg := runtime.VectorConfig{
 		Provider:   "milvus",
 		Endpoint:   "https://milvus.example.internal",

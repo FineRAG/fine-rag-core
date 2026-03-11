@@ -38,7 +38,7 @@ Source: User clarifications + initial specification
   * Search input for query execution.
   * Results view for retrieval responses.
 * Vector store: Milvus.
-* Blob store: MinIO (all environments for now).
+* Blob store: AWS S3 in `ap-south-1` for deployed environments; S3-compatible endpoints may be used for local development if needed.
 * AI provider abstraction through gateway; default gateway Portkey.
 * Embedding service: Qwen3-Embedding-4B as sidecar container.
 * Retrieval quality includes reranking (cross-encoder) in v1 using a provider-hosted reranker API (managed).
@@ -66,7 +66,7 @@ Source: User clarifications + initial specification
 ## 6. Observability and Metering
 
 * OpenTelemetry instrumentation across critical paths.
-* Metrics backend: Prometheus + Grafana.
+* Metrics backend: managed Prometheus + managed Grafana.
 * Cost attribution model by tenant must be supported in architecture (detailed implementation may span later milestones).
 
 ## 7. Deployment and Runtime

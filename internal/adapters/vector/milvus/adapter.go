@@ -2,16 +2,34 @@ package milvus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"enterprise-go-rag/internal/adapters/vector"
 	"enterprise-go-rag/internal/contracts"
+
+	mclient "github.com/milvus-io/milvus-sdk-go/v2/client"
+	"github.com/milvus-io/milvus-sdk-go/v2/entity"
+)
+
+const (
+	fieldRecordID    = "record_id"
+	fieldTenantID    = "tenant_id"
+	fieldJobID       = "job_id"
+	fieldChunkText   = "chunk_text"
+	fieldSourceURI   = "source_uri"
+	fieldChecksum    = "checksum"
+	fieldRetryCount  = "retry_count"
+	fieldIndexedAtMs = "indexed_at_ms"
+	fieldMetadata    = "metadata_json"
+	fieldEmbedding   = "embedding"
 )
 
 type Config struct {
@@ -26,9 +44,10 @@ type Config struct {
 
 type Adapter struct {
 	cfg       Config
-	mu        sync.Mutex
-	store     map[contracts.TenantID][]contracts.VectorRecord
+	cli       mclient.Client
 	lastTrace contracts.VectorCallTrace
+	mu        sync.Mutex
+	dim       int
 }
 
 func NewAdapter(cfg Config) (*Adapter, error) {
@@ -44,129 +63,254 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 	if !cfg.TLS {
 		return nil, errors.New("FINE_RAG_MILVUS_TLS must be true for milvus provider")
 	}
-	return &Adapter{cfg: cfg, store: map[contracts.TenantID][]contracts.VectorRecord{}}, nil
+	address, err := normalizeMilvusAddress(cfg.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+	connectCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cli, err := mclient.NewClient(connectCtx, mclient.Config{
+		Address:       address,
+		Username:      strings.TrimSpace(cfg.Username),
+		Password:      strings.TrimSpace(cfg.Password),
+		DBName:        strings.TrimSpace(cfg.Database),
+		EnableTLSAuth: cfg.TLS,
+		APIKey:        strings.TrimSpace(cfg.Token),
+	})
+	if err != nil {
+		return nil, vector.NormalizeProviderError("milvus", "connect", err)
+	}
+	adapter := &Adapter{cfg: cfg, cli: cli}
+	adapter.markTrace("ok", time.Now())
+	return adapter, nil
 }
 
 func (a *Adapter) Upsert(ctx context.Context, records []contracts.VectorRecord) error {
-	start := time.Now()
-	a.markTrace("ok", start)
+	started := time.Now()
 	if len(records) == 0 {
+		a.markTrace("validation_error", started)
 		return vector.NormalizeProviderError("milvus", "upsert", errors.New("at least one record is required"))
+	}
+	dim := len(records[0].Embedding)
+	if dim <= 0 {
+		a.markTrace("validation_error", started)
+		return vector.NormalizeProviderError("milvus", "upsert", errors.New("embedding is required"))
 	}
 	for _, record := range records {
 		if err := record.Validate(); err != nil {
+			a.markTrace("validation_error", started)
 			return vector.NormalizeProviderError("milvus", "upsert", err)
 		}
+		if len(record.Embedding) != dim {
+			a.markTrace("validation_error", started)
+			return vector.NormalizeProviderError("milvus", "upsert", fmt.Errorf("embedding dimension mismatch: got=%d want=%d", len(record.Embedding), dim))
+		}
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	if err := a.ensureCollection(ctx, dim); err != nil {
+		a.markTrace("collection_error", started)
+		return vector.NormalizeProviderError("milvus", "upsert", err)
+	}
+
+	recordIDs := make([]string, 0, len(records))
+	tenantIDs := make([]string, 0, len(records))
+	jobIDs := make([]string, 0, len(records))
+	chunkTexts := make([]string, 0, len(records))
+	sourceURIs := make([]string, 0, len(records))
+	checksums := make([]string, 0, len(records))
+	retryCounts := make([]int64, 0, len(records))
+	indexedAt := make([]int64, 0, len(records))
+	metadataJSON := make([]string, 0, len(records))
+	embeddings := make([][]float32, 0, len(records))
 	for _, record := range records {
-		byTenant := a.store[record.TenantID]
-		replaced := false
-		for i := range byTenant {
-			if byTenant[i].RecordID == record.RecordID {
-				byTenant[i] = record
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			byTenant = append(byTenant, record)
-		}
-		a.store[record.TenantID] = byTenant
+		recordIDs = append(recordIDs, record.RecordID)
+		tenantIDs = append(tenantIDs, string(record.TenantID))
+		jobIDs = append(jobIDs, record.JobID)
+		chunkTexts = append(chunkTexts, record.ChunkText)
+		sourceURIs = append(sourceURIs, record.SourceURI)
+		checksums = append(checksums, record.Checksum)
+		retryCounts = append(retryCounts, int64(record.RetryCount))
+		indexedAt = append(indexedAt, record.IndexedAt.UTC().UnixMilli())
+		metadataJSON = append(metadataJSON, marshalMetadata(record.Metadata))
+		embeddings = append(embeddings, record.Embedding)
 	}
+
+	_, err := a.cli.Upsert(
+		ctx,
+		a.cfg.Collection,
+		"",
+		entity.NewColumnVarChar(fieldRecordID, recordIDs),
+		entity.NewColumnVarChar(fieldTenantID, tenantIDs),
+		entity.NewColumnVarChar(fieldJobID, jobIDs),
+		entity.NewColumnVarChar(fieldChunkText, chunkTexts),
+		entity.NewColumnVarChar(fieldSourceURI, sourceURIs),
+		entity.NewColumnVarChar(fieldChecksum, checksums),
+		entity.NewColumnInt64(fieldRetryCount, retryCounts),
+		entity.NewColumnInt64(fieldIndexedAtMs, indexedAt),
+		entity.NewColumnVarChar(fieldMetadata, metadataJSON),
+		entity.NewColumnFloatVector(fieldEmbedding, dim, embeddings),
+	)
+	if err != nil {
+		a.markTrace("error", started)
+		return vector.NormalizeProviderError("milvus", "upsert", err)
+	}
+	if err := a.cli.Flush(ctx, a.cfg.Collection, false); err != nil {
+		a.markTrace("error", started)
+		return vector.NormalizeProviderError("milvus", "upsert", err)
+	}
+	a.markTrace("ok", started)
 	return nil
 }
 
 func (a *Adapter) Search(ctx context.Context, tenantID contracts.TenantID, queryText string, topK int) ([]contracts.RetrievalDocument, error) {
-	start := time.Now()
-	a.markTrace("ok", start)
+	started := time.Now()
 	if err := tenantID.Validate(); err != nil {
+		a.markTrace("validation_error", started)
 		return nil, vector.NormalizeProviderError("milvus", "search", err)
 	}
 	if strings.TrimSpace(queryText) == "" {
+		a.markTrace("validation_error", started)
 		return nil, vector.NormalizeProviderError("milvus", "search", errors.New("query text is required"))
 	}
 	if topK <= 0 {
+		a.markTrace("validation_error", started)
 		return nil, vector.NormalizeProviderError("milvus", "search", errors.New("top_k must be > 0"))
 	}
+	if err := a.ensureCollection(ctx, 0); err != nil {
+		a.markTrace("error", started)
+		return nil, vector.NormalizeProviderError("milvus", "search", err)
+	}
 
-	a.mu.Lock()
-	records := make([]contracts.VectorRecord, len(a.store[tenantID]))
-	copy(records, a.store[tenantID])
-	a.mu.Unlock()
+	expr := fmt.Sprintf("%s == %q", fieldTenantID, escapeExprString(string(tenantID)))
+	limit := int64(topK * 24)
+	if limit < int64(topK) {
+		limit = int64(topK)
+	}
+	if limit > 512 {
+		limit = 512
+	}
+	resultSet, err := a.cli.Query(
+		ctx,
+		a.cfg.Collection,
+		nil,
+		expr,
+		[]string{fieldRecordID, fieldChunkText, fieldSourceURI, fieldMetadata},
+		mclient.WithLimit(limit),
+	)
+	if err != nil {
+		a.markTrace("error", started)
+		return nil, vector.NormalizeProviderError("milvus", "search", err)
+	}
+	if len(resultSet) == 0 {
+		a.markTrace("ok", started)
+		return nil, nil
+	}
 
-	docs := make([]contracts.RetrievalDocument, 0, len(records))
-	for _, record := range records {
-		score := lexicalScore(queryText, record.ChunkText)
-		metadata := map[string]string{}
-		for key, value := range record.Metadata {
-			metadata[key] = value
-		}
-		docs = append(docs, contracts.RetrievalDocument{
-			DocumentID: record.RecordID,
-			TenantID:   record.TenantID,
-			Content:    record.ChunkText,
-			Score:      score,
-			SourceURI:  record.SourceURI,
-			Metadata:   metadata,
-		})
+	docs := rowsFromResultSet(resultSet, tenantID)
+	query := strings.TrimSpace(strings.ToLower(queryText))
+	for i := range docs {
+		docs[i].Score = lexicalScore(query, docs[i].Content)
 	}
 	sort.SliceStable(docs, func(i, j int) bool { return docs[i].Score > docs[j].Score })
 	if topK < len(docs) {
 		docs = docs[:topK]
 	}
+	a.markTrace("ok", started)
 	return docs, nil
 }
 
 func (a *Adapter) SearchByEmbedding(ctx context.Context, tenantID contracts.TenantID, queryEmbedding []float32, topK int) ([]contracts.RetrievalDocument, error) {
-	start := time.Now()
-	a.markTrace("ok", start)
+	started := time.Now()
 	if err := tenantID.Validate(); err != nil {
+		a.markTrace("validation_error", started)
 		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", err)
 	}
 	if len(queryEmbedding) == 0 {
+		a.markTrace("validation_error", started)
 		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", errors.New("query embedding is required"))
 	}
 	if topK <= 0 {
+		a.markTrace("validation_error", started)
 		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", errors.New("top_k must be > 0"))
 	}
+	if err := a.ensureCollection(ctx, len(queryEmbedding)); err != nil {
+		a.markTrace("error", started)
+		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", err)
+	}
+	if err := a.cli.LoadCollection(ctx, a.cfg.Collection, false); err != nil {
+		a.markTrace("error", started)
+		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", err)
+	}
 
-	a.mu.Lock()
-	records := make([]contracts.VectorRecord, len(a.store[tenantID]))
-	copy(records, a.store[tenantID])
-	a.mu.Unlock()
-
-	docs := make([]contracts.RetrievalDocument, 0, len(records))
-	for _, record := range records {
-		score := cosineSimilarity(queryEmbedding, record.Embedding)
-		metadata := map[string]string{}
-		for key, value := range record.Metadata {
-			metadata[key] = value
+	searchParam, err := entity.NewIndexAUTOINDEXSearchParam(2)
+	if err != nil {
+		a.markTrace("error", started)
+		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", err)
+	}
+	expr := fmt.Sprintf("%s == %q", fieldTenantID, escapeExprString(string(tenantID)))
+	results, err := a.cli.Search(
+		ctx,
+		a.cfg.Collection,
+		nil,
+		expr,
+		[]string{fieldChunkText, fieldSourceURI, fieldMetadata},
+		[]entity.Vector{entity.FloatVector(queryEmbedding)},
+		fieldEmbedding,
+		entity.COSINE,
+		topK,
+		searchParam,
+	)
+	if err != nil {
+		a.markTrace("error", started)
+		return nil, vector.NormalizeProviderError("milvus", "search_by_embedding", err)
+	}
+	if len(results) == 0 {
+		a.markTrace("ok", started)
+		return nil, nil
+	}
+	result := results[0]
+	docs := make([]contracts.RetrievalDocument, 0, result.ResultCount)
+	for i := 0; i < result.ResultCount; i++ {
+		id := readColumnString(result.IDs, i)
+		content := readSearchField(result.Fields, fieldChunkText, i)
+		source := readSearchField(result.Fields, fieldSourceURI, i)
+		metadata := unmarshalMetadata(readSearchField(result.Fields, fieldMetadata, i))
+		score := 0.0
+		if i < len(result.Scores) {
+			score = float64(result.Scores[i])
 		}
 		docs = append(docs, contracts.RetrievalDocument{
-			DocumentID: record.RecordID,
-			TenantID:   record.TenantID,
-			Content:    record.ChunkText,
+			DocumentID: id,
+			TenantID:   tenantID,
+			Content:    content,
 			Score:      score,
-			SourceURI:  record.SourceURI,
+			SourceURI:  source,
 			Metadata:   metadata,
 		})
 	}
-	sort.SliceStable(docs, func(i, j int) bool { return docs[i].Score > docs[j].Score })
-	if topK < len(docs) {
-		docs = docs[:topK]
-	}
+	a.markTrace("ok", started)
 	return docs, nil
 }
 
-func (a *Adapter) PurgeTenant(_ context.Context, tenantID contracts.TenantID) error {
+func (a *Adapter) PurgeTenant(ctx context.Context, tenantID contracts.TenantID) error {
+	started := time.Now()
 	if err := tenantID.Validate(); err != nil {
+		a.markTrace("validation_error", started)
 		return vector.NormalizeProviderError("milvus", "purge", err)
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.store, tenantID)
+	if err := a.ensureCollection(ctx, 0); err != nil {
+		a.markTrace("error", started)
+		return vector.NormalizeProviderError("milvus", "purge", err)
+	}
+	expr := fmt.Sprintf("%s == %q", fieldTenantID, escapeExprString(string(tenantID)))
+	if err := a.cli.Delete(ctx, a.cfg.Collection, "", expr); err != nil {
+		a.markTrace("error", started)
+		return vector.NormalizeProviderError("milvus", "purge", err)
+	}
+	if err := a.cli.Flush(ctx, a.cfg.Collection, false); err != nil {
+		a.markTrace("error", started)
+		return vector.NormalizeProviderError("milvus", "purge", err)
+	}
+	a.markTrace("ok", started)
 	return nil
 }
 
@@ -176,18 +320,191 @@ func (a *Adapter) LastVectorTrace() contracts.VectorCallTrace {
 	return a.lastTrace
 }
 
-func (a *Adapter) markTrace(status string, start time.Time) {
+func (a *Adapter) DebugString() string {
+	return fmt.Sprintf("milvus(%s/%s)", a.cfg.Database, a.cfg.Collection)
+}
+
+func (a *Adapter) ensureCollection(ctx context.Context, dim int) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.lastTrace = contracts.VectorCallTrace{
-		Provider:      "milvus",
-		Status:        status,
-		LatencyMillis: time.Since(start).Milliseconds(),
+	knownDim := a.dim
+	a.mu.Unlock()
+	if dim <= 0 {
+		dim = knownDim
 	}
+	exists, err := a.cli.HasCollection(ctx, a.cfg.Collection)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if knownDim == 0 {
+			coll, derr := a.cli.DescribeCollection(ctx, a.cfg.Collection)
+			if derr == nil {
+				for _, f := range coll.Schema.Fields {
+					if f.Name == fieldEmbedding {
+						if d, ok := f.TypeParams[entity.TypeParamDim]; ok {
+							if parsed, perr := strconv.Atoi(d); perr == nil && parsed > 0 {
+								a.mu.Lock()
+								a.dim = parsed
+								a.mu.Unlock()
+							}
+						}
+						break
+					}
+				}
+			}
+		}
+		if err := a.ensureIndexAndLoad(ctx); err != nil {
+			return err
+		}
+		return nil
+	}
+	if dim <= 0 {
+		return errors.New("embedding dimension is required to initialize collection")
+	}
+	schema := entity.NewSchema().
+		WithName(a.cfg.Collection).
+		WithDescription("FineR tenant-scoped vector collection").
+		WithAutoID(false).
+		WithDynamicFieldEnabled(false).
+		WithField(entity.NewField().WithName(fieldRecordID).WithDataType(entity.FieldTypeVarChar).WithMaxLength(256).WithIsPrimaryKey(true).WithIsAutoID(false)).
+		WithField(entity.NewField().WithName(fieldTenantID).WithDataType(entity.FieldTypeVarChar).WithMaxLength(128)).
+		WithField(entity.NewField().WithName(fieldJobID).WithDataType(entity.FieldTypeVarChar).WithMaxLength(128)).
+		WithField(entity.NewField().WithName(fieldChunkText).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
+		WithField(entity.NewField().WithName(fieldSourceURI).WithDataType(entity.FieldTypeVarChar).WithMaxLength(2048)).
+		WithField(entity.NewField().WithName(fieldChecksum).WithDataType(entity.FieldTypeVarChar).WithMaxLength(128)).
+		WithField(entity.NewField().WithName(fieldRetryCount).WithDataType(entity.FieldTypeInt64)).
+		WithField(entity.NewField().WithName(fieldIndexedAtMs).WithDataType(entity.FieldTypeInt64)).
+		WithField(entity.NewField().WithName(fieldMetadata).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
+		WithField(entity.NewField().WithName(fieldEmbedding).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dim)))
+	if err := a.cli.CreateCollection(ctx, schema, 2); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.dim = dim
+	a.mu.Unlock()
+	if err := a.ensureIndexAndLoad(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *Adapter) ensureIndexAndLoad(ctx context.Context) error {
+	idx, err := entity.NewIndexAUTOINDEX(entity.COSINE)
+	if err != nil {
+		return err
+	}
+	if err := a.cli.CreateIndex(ctx, a.cfg.Collection, fieldEmbedding, idx, false); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "already") && !strings.Contains(msg, "exist") {
+			return err
+		}
+	}
+	if err := a.cli.LoadCollection(ctx, a.cfg.Collection, false); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "already") && !strings.Contains(msg, "loaded") {
+			return err
+		}
+	}
+	return nil
+}
+
+func rowsFromResultSet(resultSet mclient.ResultSet, tenantID contracts.TenantID) []contracts.RetrievalDocument {
+	if len(resultSet) == 0 {
+		return nil
+	}
+	rowCount := resultSet[0].Len()
+	docs := make([]contracts.RetrievalDocument, 0, rowCount)
+	for i := 0; i < rowCount; i++ {
+		id := readResultField(resultSet, fieldRecordID, i)
+		content := readResultField(resultSet, fieldChunkText, i)
+		source := readResultField(resultSet, fieldSourceURI, i)
+		metadata := unmarshalMetadata(readResultField(resultSet, fieldMetadata, i))
+		docs = append(docs, contracts.RetrievalDocument{
+			DocumentID: id,
+			TenantID:   tenantID,
+			Content:    content,
+			SourceURI:  source,
+			Metadata:   metadata,
+		})
+	}
+	return docs
+}
+
+func readResultField(resultSet mclient.ResultSet, field string, idx int) string {
+	for _, col := range resultSet {
+		if col.Name() != field {
+			continue
+		}
+		if v, err := col.GetAsString(idx); err == nil {
+			return strings.TrimSpace(v)
+		}
+		if v, err := col.Get(idx); err == nil {
+			return strings.TrimSpace(fmt.Sprint(v))
+		}
+		return ""
+	}
+	return ""
+}
+
+func readSearchField(cols []entity.Column, field string, idx int) string {
+	for _, col := range cols {
+		if col.Name() != field {
+			continue
+		}
+		if v, err := col.GetAsString(idx); err == nil {
+			return strings.TrimSpace(v)
+		}
+		if v, err := col.Get(idx); err == nil {
+			return strings.TrimSpace(fmt.Sprint(v))
+		}
+		return ""
+	}
+	return ""
+}
+
+func readColumnString(col entity.Column, idx int) string {
+	if col == nil {
+		return ""
+	}
+	if v, err := col.GetAsString(idx); err == nil {
+		return strings.TrimSpace(v)
+	}
+	if v, err := col.Get(idx); err == nil {
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+	return ""
+}
+
+func unmarshalMetadata(raw string) map[string]string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return map[string]string{}
+	}
+	decoded := map[string]string{}
+	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+		return map[string]string{}
+	}
+	return decoded
+}
+
+func marshalMetadata(metadata map[string]string) string {
+	if len(metadata) == 0 {
+		return "{}"
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+func escapeExprString(input string) string {
+	replacer := strings.NewReplacer("\\", "\\\\", "\"", "\\\"")
+	return replacer.Replace(input)
 }
 
 func lexicalScore(query string, content string) float64 {
-	queryTokens := strings.Fields(strings.ToLower(query))
+	queryTokens := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
 	contentLC := strings.ToLower(content)
 	if len(queryTokens) == 0 {
 		return 0
@@ -204,30 +521,37 @@ func lexicalScore(query string, content string) float64 {
 	return float64(hits) + float64(len(content)%10)/100.0
 }
 
-func cosineSimilarity(left []float32, right []float32) float64 {
-	if len(left) == 0 || len(right) == 0 {
-		return 0
+func normalizeMilvusAddress(endpoint string) (string, error) {
+	raw := strings.TrimSpace(endpoint)
+	if raw == "" {
+		return "", errors.New("milvus endpoint is empty")
 	}
-	n := len(left)
-	if len(right) < n {
-		n = len(right)
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid milvus endpoint: %w", err)
+		}
+		host := strings.TrimSpace(u.Host)
+		if host == "" {
+			return "", errors.New("invalid milvus endpoint host")
+		}
+		if strings.Contains(host, ":") {
+			return host, nil
+		}
+		return host + ":19530", nil
 	}
-	var dot float64
-	var leftNorm float64
-	var rightNorm float64
-	for i := 0; i < n; i++ {
-		l := float64(left[i])
-		r := float64(right[i])
-		dot += l * r
-		leftNorm += l * l
-		rightNorm += r * r
+	if strings.Contains(raw, ":") {
+		return raw, nil
 	}
-	if leftNorm == 0 || rightNorm == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(leftNorm) * math.Sqrt(rightNorm))
+	return raw + ":443", nil
 }
 
-func (a *Adapter) DebugString() string {
-	return fmt.Sprintf("milvus(%s/%s)", a.cfg.Database, a.cfg.Collection)
+func (a *Adapter) markTrace(status string, start time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lastTrace = contracts.VectorCallTrace{
+		Provider:      "milvus",
+		Status:        status,
+		LatencyMillis: time.Since(start).Milliseconds(),
+	}
 }

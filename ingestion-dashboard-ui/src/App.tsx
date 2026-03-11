@@ -12,7 +12,7 @@ import {
   serializeIngestionPayloadFromUri,
   SessionExpiredError,
   submitIngestionJob,
-  uploadLocalFilesToMinio,
+  uploadLocalFilesToS3,
 } from './api'
 import type {
   AuthSession,
@@ -241,7 +241,7 @@ function App() {
       }
 
       const presignedUploads = await requestPresignedUploads(activeSession, localItems)
-      await uploadLocalFilesToMinio(presignedUploads, filesByRelativePath)
+      await uploadLocalFilesToS3(presignedUploads, filesByRelativePath)
       const localPayload = serializeIngestionPayloadFromLocal(localItems, presignedUploads.map((item) => item.objectKey))
 
       const created = await submitIngestionJob(activeSession, localPayload)
@@ -280,7 +280,7 @@ function App() {
   if (!activeSession) {
     return
   }
-  if (!window.confirm(`This will delete MinIO objects and vector/job data for ${activeSession.tenantId}. Continue?`)) {
+  if (!window.confirm(`This will delete S3 objects and vector/job data for ${activeSession.tenantId}. Continue?`)) {
     return
   }
   try {
@@ -318,7 +318,7 @@ function App() {
       <header className="hero">
         <p className="eyebrow">Enterprise FineR</p>
         <h1>Ingestion Dashboard</h1>
-        <p className="subtitle">Login, upload to MinIO, and monitor ingestion lifecycle on refresh.</p>
+        <p className="subtitle">Login, upload to S3, and monitor ingestion lifecycle on refresh.</p>
       </header>
 
       {authStatus !== 'authenticated' || !authSession ? (

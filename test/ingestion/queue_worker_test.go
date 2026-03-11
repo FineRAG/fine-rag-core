@@ -277,7 +277,7 @@ func TestQueueWorkerRoutesFailuresToDLQAfterRetryExhaustion(t *testing.T) {
 	}
 }
 
-func TestMilvusMinIOIngestionE2EReplayFlow(t *testing.T) {
+func TestMilvusS3IngestionE2EReplayFlow(t *testing.T) {
 	queue := &memoryQueue{}
 	blob := &memoryBlobStore{payloadBySource: map[string][]byte{
 		"s3://tenant-a-ap-south-1/docs/manual.txt": []byte("first second third fourth fifth sixth"),
@@ -311,7 +311,7 @@ func TestMilvusMinIOIngestionE2EReplayFlow(t *testing.T) {
 	}
 
 	if len(blob.reads) < 1 {
-		t.Fatal("expected MinIO/blob store reads to occur")
+		t.Fatal("expected object store reads to occur")
 	}
 	if len(index.upserts) != 1 {
 		t.Fatalf("expected Milvus/vector index upsert only once due to idempotency, got %d", len(index.upserts))

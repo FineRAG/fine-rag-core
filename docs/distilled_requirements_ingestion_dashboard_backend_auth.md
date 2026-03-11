@@ -1,4 +1,4 @@
-# Distilled Requirements: Ingestion Dashboard Backend Auth + MinIO Upload
+# Distilled Requirements: Ingestion Dashboard Backend Auth + S3 Upload
 
 Date: 2026-03-09
 Status: Approved by user answers
@@ -13,7 +13,7 @@ Scope: `ingestion-dashboard-ui`
 5. Dashboard content: aggregate cards + list/table for knowledge base.
 6. Vector size metric: show both vector count and storage size.
 7. Tenant switching: tenant switcher in header.
-8. Upload path: presigned URL direct upload to MinIO.
+8. Upload path: presigned URL direct upload to S3.
 9. Folder upload behavior: recursive with extension allowlist.
 10. Pipeline configuration: fixed in v1 (cleanup/classification/other stages).
 11. Progress granularity: stage-level + per-file counters.

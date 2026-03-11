@@ -1,68 +1,79 @@
-# FineR (Fine-RAG)
+# FineR (Fine-RAG) 🚀
+
+`#EnterpriseAI` `#RAGPlatform` `#Go` `#SecurityByDefault` `#HighThroughput`
 
 FineR is an enterprise RAG platform built in Go for teams that need speed, control, and trust in production AI systems.
 
-It is designed to reduce rework across data engineering, platform, security, and AI teams by combining governed ingestion, high-throughput retrieval, and strict access controls in one stack.
+## Why FineR? 🧠
 
-## Why Enterprises Choose FineR
+`[PAIN-KILLER]` `[#LessRework]` `[#FasterRollout]`
 
-FineR is built to eliminate common enterprise pain:
+- 🔁 No more rebuilding pipelines every quarter due to data quality drift.
+- 🧹 No more debugging weak retrieval caused by unclean document ingestion.
+- 🔐 No more retrofitting security controls after launch.
+- 🧱 No more tenant-boundary incidents from ad-hoc architecture.
 
-- Rebuilding pipelines every quarter because data quality drifts.
-- Spending engineering time debugging weak retrieval caused by unclean documents.
-- Retrofitting security controls after launch.
-- Handling incidents caused by tenant or policy boundary mistakes.
+`[OPERATING MODEL]`
 
-FineR addresses this with a single operational model:
+- 🧼 Clean and normalize data before embedding.
+- 🏷️ Persist metadata to power filtering and routing.
+- 🛡️ Enforce tenant and access boundaries at query time.
+- 📊 Keep governance, traceability, and observability in the request path.
 
-- Clean and normalize data before embedding.
-- Persist metadata that improves filtering and routing.
-- Enforce tenant and access boundaries at query time.
-- Keep governance, traceability, and observability in the request path.
+## Business Impact 💼
 
-## Business Impact
+`[#TCO]` `[#ROI]` `[#ProductionReady]`
 
-- Faster rollout: one stack for ingestion, retrieval, and secure query APIs.
-- Less rework: standardized pipeline for cleaning, chunking, embedding, and indexing.
-- Better answer quality: metadata-aware retrieval with rerank support and grounded generation.
-- Lower risk: policy checks and protection controls are built in from day 1.
-- Better cost control: reduced wasted tokens through cleaner context and stricter retrieval inputs.
+- ⚡ Faster rollout with one stack for ingestion, retrieval, and secure query APIs.
+- 🧰 Less rework through standardized cleaning, chunking, embedding, and indexing.
+- 🎯 Better answer quality with metadata-aware retrieval and grounded generation.
+- 🛡️ Lower risk with policy checks and layered controls from day 1.
+- 💸 Better cost control via cleaner context and reduced token waste.
 
-## Built for Performance and Scale
+## Performance and Scale ⚙️
 
-- Go backend optimized for concurrent, high-throughput request handling.
-- Milvus-backed vector retrieval for scalable semantic search.
-- Chunked ingestion pipeline built for large document volumes.
-- Streaming search API for responsive UX under load.
-- Container-native architecture for horizontal scaling in cloud or on-prem environments.
+`[#BlazingFast]` `[#Scalable]` `[#Streaming]`
 
-## Trust, Security, and Data Protection by Default
+- 🏎️ Go backend optimized for high-throughput concurrent workloads.
+- 🧠 Milvus-backed semantic retrieval at enterprise scale.
+- 📦 Chunked ingestion pipeline for large document sets.
+- 🌊 Streaming search API for low-latency UX.
+- ☁️ Container-native architecture for cloud and on-prem deployment.
 
-- Multi-tenant isolation with mandatory tenant context.
-- Layered access model with RBAC and ABAC-ready enforcement points.
-- Governance policies for restricted data and residency-sensitive sources.
-- Metadata-driven filtering to prevent cross-domain leakage.
-- Built-in PII handling path with redaction/anonymization policy hooks.
-- Audit-friendly traces and request-level diagnostics.
+## Security, Governance, and Data Protection 🔒
 
-## Architecture Snapshot
+`[#ZeroLeakage]` `[#RBAC]` `[#ABAC]` `[#PII]` `[#RegulatedData]`
 
-- Backend: Go (`cmd/finerag-backend`)
-- Vector store: Milvus
-- Object store: MinIO
-- Database: PostgreSQL
-- Model gateway: Portkey
-- LLM/Embedding providers: OpenRouter-configured models
-- Ingestion UI: `ingestion-dashboard-ui` for governed upload/index flow
-- Search UI: `search-query-ui` for search and stream validation
+- 🧱 Engineered layered security and governance model: tenant-scoped access paths, RBAC/ABAC enforcement, and automated PII redaction pathways to ensure zero-leakage compliance for regulated data.
+- 🏢 Multi-tenant isolation with mandatory tenant context.
+- 🧾 Governance policies for restricted and residency-sensitive data.
+- 🧭 Metadata-driven filtering to prevent cross-domain leakage.
+- 👤 Built-in PII handling paths with redaction/anonymization policy hooks.
+- 📚 Audit-friendly traces and request-level diagnostics.
 
-## Start the Stack Locally
+## Architecture Snapshot 🧩
+
+`[#Modular]` `[#EnterpriseStack]`
+
+- 🛠️ Backend: Go (`cmd/finerag-backend`)
+- 🧠 Vector Store: Milvus
+- 🗃️ Object Store: AWS S3
+- 🐘 Database: PostgreSQL
+- 🌐 Model Gateway: Portkey
+- 🤖 LLM/Embeddings: OpenRouter-configured models
+- 📤 Ingestion UI: `ingestion-dashboard-ui`
+- 🔎 Search UI: `search-query-ui`
+
+## Local Quickstart in Minutes 🚦
+
+`[#DevReady]` `[#OneCommand]`
 
 ### Prerequisites
 
-- Docker and Docker Compose plugin
-- Go toolchain (for local tests/build)
-- `secrets/*.txt` files present (already expected by compose)
+- 🐳 Docker + Docker Compose plugin
+- 🧪 Go toolchain (for local tests/build)
+- 🔐 `secrets/*.txt` available
+- ☁️ AWS S3 bucket access from the runtime environment
 
 ### Launch
 
@@ -70,25 +81,26 @@ FineR addresses this with a single operational model:
 docker compose -f docker-compose.yml up -d --build
 ```
 
-Core local endpoints:
+### Endpoints
 
-- Backend API: `http://localhost:18080`
-- Ingestion Dashboard: `http://localhost:14173`
-- Search Query UI: `http://localhost:14174`
-- MinIO API: `http://localhost:19000`
-- MinIO Console: `http://localhost:19001`
-- Grafana: `http://localhost:13000`
-- Prometheus: `http://localhost:19090`
+- 🔌 Backend API: `http://localhost:18080`
+- 📤 Ingestion Dashboard: published by `docker-compose.yml`
+- 🔎 Search Query UI: published by `docker-compose.yml`
 
-To stop:
+Observability for deployed environments is expected to come from managed Grafana and managed Prometheus rather than containers in this repo.
+Object storage for deployed environments is expected to come from AWS S3.
+
+### Stop
 
 ```bash
 docker compose -f docker-compose.yml down
 ```
 
-## Upload and Query in Minutes
+## Upload and Query Flow 🛤️
 
-### 1. Login and get token
+`[#PresignedUpload]` `[#GovernedIngestion]` `[#SemanticSearch]`
+
+### 1. Login and get token 🔑
 
 ```bash
 BASE_URL=http://localhost:18080
@@ -103,7 +115,7 @@ TOKEN=$(curl -sS -X POST "$BASE_URL/api/v1/auth/login" \
   python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
 ```
 
-### 2. Resolve tenant
+### 2. Resolve tenant 🏷️
 
 ```bash
 TENANT_ID=$(curl -sS "$BASE_URL/api/v1/tenants" \
@@ -112,7 +124,7 @@ TENANT_ID=$(curl -sS "$BASE_URL/api/v1/tenants" \
   python3 -c 'import json,sys;d=json.load(sys.stdin);print(d[0]["tenantId"])')
 ```
 
-### 3. Presign upload
+### 3. Presign upload URL 📎
 
 ```bash
 FILE_PATH=./Shafeeq-Resume-Mar-2026.pdf
@@ -130,7 +142,7 @@ UPLOAD_URL=$(printf %s "$PRESIGN_JSON" | python3 -c 'import json,sys;j=json.load
 OBJECT_KEY=$(printf %s "$PRESIGN_JSON" | python3 -c 'import json,sys;j=json.load(sys.stdin);print(j["uploads"][0]["objectKey"])')
 ```
 
-### 4. Upload and create ingestion job
+### 4. Upload + create ingestion job 📥
 
 ```bash
 curl -sS -X PUT "$UPLOAD_URL" -H "Content-Type: application/pdf" --data-binary @"$FILE_PATH" > /dev/null
@@ -143,7 +155,7 @@ curl -sS -X POST "$BASE_URL/api/v1/ingestion/jobs" \
   -d "{\"sourceMode\":\"local\",\"sourceUri\":\"local://$FILE_NAME\",\"objectKeys\":[\"$OBJECT_KEY\"],\"localItems\":[{\"name\":\"$FILE_NAME\",\"size\":$FILE_SIZE,\"type\":\"application/pdf\",\"relativePath\":\"$FILE_NAME\"}]}"
 ```
 
-### 5. Search
+### 5. Query search API 🔍
 
 ```bash
 curl -sS -X POST "$BASE_URL/api/v1/search" \
@@ -154,7 +166,7 @@ curl -sS -X POST "$BASE_URL/api/v1/search" \
   -d '{"queryText":"what is shafeeq email address?","topK":5}'
 ```
 
-### 6. Stream search (SSE)
+### 6. Query stream API (SSE) 🌊
 
 ```bash
 curl -sS -N -X POST "$BASE_URL/api/v1/search/stream" \
@@ -165,37 +177,53 @@ curl -sS -N -X POST "$BASE_URL/api/v1/search/stream" \
   -d '{"queryText":"what is shafeeq email address?"}'
 ```
 
-## Governance and Restricted Data Controls
+## Governance and Restricted Data Controls 🛂
 
-FineR is designed for policy-sensitive enterprise environments:
+`[#ComplianceReady]` `[#PolicyGates]`
 
-- Ingestion policy gates for residency, PII and data handling checks.
-- Deterministic governance decisions with audit sink support.
-- Metadata and intent-aware ranking paths to improve precision for restricted scopes.
-- Safer context construction to avoid passing unreadable/noisy payloads into generation.
+- 📌 Ingestion policy gates for residency, PII, and data handling checks.
+- 🧾 Deterministic governance decisions with audit sink support.
+- 🎯 Metadata and intent-aware ranking for restricted scopes.
+- 🧹 Safer context construction to avoid unreadable/noisy payload injection into generation.
 
-## Observability and Operations
+## Observability and Ops 📡
 
-- Structured logs for each stage: ingestion, embedding, retrieval, rerank, and generation.
-- Debug traces for original query, retrieved vectors, LLM input, and final answer output.
-- Prometheus and Grafana included for runtime visibility.
+`[#TraceEverything]` `[#OperateWithConfidence]`
 
-## Optional Remote Deploy and Local Tunnel
+- 🪵 Structured logs across ingestion, embedding, retrieval, rerank, and generation.
+- 🔎 Debug traces for query, retrieved vectors, LLM input, and final output.
+- 📈 Managed Prometheus + Grafana visibility.
 
-To deploy/sync to EC2 and expose both UIs locally:
+Grafana Cloud OTLP setup for the backend:
+
+```bash
+export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://otlp-gateway-<zone>.grafana.net/otlp"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic%20<base64-encoded-instance-id-and-token>"
+
+docker compose -f docker-compose.stack.yml up -d --build
+```
+
+The backend container forwards those env vars directly and emits HTTP server telemetry over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+
+## Remote Deploy + Local Tunnel 🌍
+
+`[#EC2]` `[#Tunnel]`
 
 ```bash
 ./run_stack_with_tunnel.sh
 ```
 
-Common variant:
+Variant:
 
 ```bash
 ./run_stack_with_tunnel.sh --skip-deploy
 ```
 
-## Positioning Summary
+## Positioning Summary 🏁
 
-FineR is not a demo-only RAG kit. It is an enterprise operating model for secure, high-throughput, governed AI retrieval and answer generation.
+`#Fast` `#Secure` `#Governed` `#EnterpriseGrade`
 
-If your teams need a platform that is fast to launch, safe by default, and scalable without recurring rework, FineR is built for that exact mandate.
+FineR is not a demo-only RAG starter kit. It is an enterprise operating model for secure, high-throughput, governed retrieval and answer generation.
+
+If your team needs rapid launch, strict data protection, and scalable AI search without recurring rework, FineR is built for that mandate.

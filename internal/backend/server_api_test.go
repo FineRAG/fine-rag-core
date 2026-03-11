@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -45,14 +46,14 @@ func newTestServer(t *testing.T) (*Server, sqlmock.Sqlmock, *vectorstub.Adapter)
 		Addr:            ":8080",
 		JWTSecret:       "test-secret",
 		TokenTTL:        time.Hour,
-		AllowedOrigins:  []string{"http://localhost:14173"},
+		AllowedOrigins:  []string{"https://dash-finer.shafeeq.dev"},
 		RateLimitPerMin: 1000,
-		UploadBaseURL:   "http://minio:9000",
-		MinIOEndpoint:   "http://minio:9000",
+		UploadBaseURL:   "https://s3.ap-south-1.amazonaws.com",
+		S3Endpoint:      "https://s3.ap-south-1.amazonaws.com",
 		UploadBucket:    "finerag-ingestion",
-		MinIOAccessKey:  "minioadmin",
-		MinIOSecretKey:  "minioadmin123",
-		MinIORegion:     "us-east-1",
+		S3AccessKey:     "access-key",
+		S3SecretKey:     "secret-key",
+		S3Region:        "ap-south-1",
 		PresignTTL:      5 * time.Minute,
 		MaxObjectBytes:  20 * 1024 * 1024,
 	}, db, nil, retrievalSvc, adapter)
@@ -139,6 +140,9 @@ func TestToASCIILowerPreservesLength(t *testing.T) {
 func TestExtractPDFSearchableText_FromAttachedResume(t *testing.T) {
 	payload, err := os.ReadFile("../../RounakPoddar-Resume.pdf")
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			t.Skip("resume fixture not present in workspace")
+		}
 		t.Fatalf("read resume fixture: %v", err)
 	}
 	text := strings.ToLower(extractPDFSearchableText(payload))
@@ -153,6 +157,9 @@ func TestExtractPDFSearchableText_FromAttachedResume(t *testing.T) {
 func TestExtractPDFSearchableText_FromShafeeqResume(t *testing.T) {
 	payload, err := os.ReadFile("../../Shafeeq-Resume-Mar-2026.pdf")
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			t.Skip("resume fixture not present in workspace")
+		}
 		t.Fatalf("read shafeeq resume fixture: %v", err)
 	}
 	text := strings.ToLower(extractPDFSearchableText(payload))

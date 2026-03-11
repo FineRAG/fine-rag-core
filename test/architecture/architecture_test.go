@@ -15,7 +15,7 @@ const modulePath = "enterprise-go-rag"
 var dependencyRules = map[string][]string{
 	"internal/contracts":           {},
 	"internal/services/ingestion":  {"internal/contracts"},
-	"internal/services/retrieval":  {"internal/contracts"},
+	"internal/services/retrieval":  {"internal/contracts", "internal/logging"},
 	"internal/services/governance": {"internal/contracts"},
 }
 

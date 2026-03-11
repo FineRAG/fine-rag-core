@@ -19,8 +19,8 @@ Backend language/runtime baseline for this project is `Go 1.26.1`.
 * Ingestion pipeline: profiler, policy checks, blob store, async queue workers.
 * Retrieval pipeline: embed, Milvus search with tenant filter, managed reranker.
 * Tenant registry + metadata in PostgreSQL.
-* MinIO object storage.
-* OTel + Prometheus + Grafana observability.
+* AWS S3 object storage.
+* OTel + managed Prometheus + managed Grafana observability.
 
 ### Deferred (v1.1+)
 
@@ -37,7 +37,7 @@ Backend language/runtime baseline for this project is `Go 1.26.1`.
 * `ingestion-worker`: chunking, embedding calls, vector writes, retry/DLQ handling.
 * `retrieval-service`: query embedding, hybrid retrieval, rerank, citation assembly.
 * `governance-service` (module in v1, separable service in v1.1): PII redaction, residency checks, metadata policy decisions.
-* `storage adapters`: PostgreSQL (tenant/config/metadata/audit), MinIO (blobs), Milvus (vectors).
+* `storage adapters`: PostgreSQL (tenant/config/metadata/audit), S3 (blobs), Milvus (vectors).
 * `ai-adapter`: Portkey gateway client + Qwen3-Embedding-4B sidecar routing.
 
 ## 3. Data Flow (Ingestion, Retrieval, Governance)
@@ -47,7 +47,7 @@ Backend language/runtime baseline for this project is `Go 1.26.1`.
 1. Tenant user uploads file/folder from lightweight UI to `POST /ingestion/jobs`.
 2. API validates tenant credentials (tenant-id + password for UI session, API key for service calls) and applies per-tenant quota.
 3. Governance gate runs profiler + PII checks and sets state: `approved`, `quarantine`, or `rejected`.
-4. Raw blob stored in MinIO path `tenant_id/class/date/object_key`.
+4. Raw blob stored in S3 path `tenant_id/class/date/object_key`.
 5. Metadata record persisted in PostgreSQL (tenant, checksum, source, policy outcome, lifecycle TTL class).
 6. Queue job emitted for `approved` artifacts.
 7. Worker chunks content, requests embeddings from Qwen sidecar via AI adapter, writes vectors to Milvus with mandatory `tenant_id` scalar filter.
@@ -75,14 +75,14 @@ Backend language/runtime baseline for this project is `Go 1.26.1`.
 * Mandatory tenant context from edge to repository interfaces; requests without tenant fail fast (`400/401`).
 * PostgreSQL row ownership enforced with tenant\_id predicates in repository layer.
 * Milvus collections include tenant filter field and query-time mandatory filter.
-* MinIO object keys and bucket policies are tenant-scoped prefixes.
+* S3 object keys and bucket policies are tenant-scoped prefixes.
 * Isolation integration tests required for ingest and retrieval leakage checks.
 
 ### Security Controls
 
 * API key per tenant (no expiry in v1, revoke-only), stored hashed + salted.
 * TLS in transit for client-to-API and service-to-service calls.
-* Encryption at rest for PostgreSQL and MinIO volumes/snapshots.
+* Encryption at rest for PostgreSQL and S3 objects.
 * Secrets from runtime secret manager (Vault or AWS Secrets Manager adapter).
 * Audit log includes auth outcome, policy outcome, and high-risk admin actions.
 
@@ -101,8 +101,8 @@ Backend language/runtime baseline for this project is `Go 1.26.1`.
 * `EC2-WorkerPool` (1-2 instances): ingestion worker containers (scaled by queue depth).
 * `PostgreSQL`: hosted platform instance (credentials supplied externally), daily snapshot policy validated by provider SLA.
 * `Milvus`: hosted platform instance (credentials supplied externally), capacity tier sized for target corpus and QPS.
-* `MinIO`: replicated mode (or single-node in dev), lifecycle policies enabled.
-* `Prometheus/Grafana`: shared observability node.
+* `AWS S3`: bucket lifecycle policies enabled; IAM and bucket policy enforce least privilege.
+* `Managed Prometheus/Grafana`: external observability services ingesting metrics and dashboards from the deployed stack.
 * `SQS` (v1): managed queue for ingestion jobs with DLQ.
 
 ### v1.1+ Topology Expansion
@@ -172,7 +172,7 @@ Backend language/runtime baseline for this project is `Go 1.26.1`.
 
 * Queue backlog growth due to embedding/reranker slowdown.
 * Milvus unavailability or degraded query latency.
-* MinIO object write/read failures.
+* S3 object write/read failures.
 * Tenant auth store (PostgreSQL) degradation.
 * Upstream AI provider timeout/rate-limit.
 
@@ -189,7 +189,7 @@ Backend language/runtime baseline for this project is `Go 1.26.1`.
 ### Build and Release Flow (EC2-Centric)
 
 1. Local branch checks.
-2. Sync to EC2 build host via `scripts/deploy_ec2.sh` (contract): `rsync` source, pull secrets, run `docker compose build`, run `docker compose up -d` for frontend, backend, MinIO, Prometheus, Grafana, OpenLIT, and operational dependencies.
+2. Sync to EC2 build host via `scripts/deploy_ec2.sh` (contract): `rsync` source, pull secrets, run `docker compose build`, run `docker compose up -d` for frontend, backend, and operational dependencies; observability is provided by managed Prometheus/Grafana outside the compose stack.
 3. Container build, SBOM generation, image vulnerability scan.
 4. Unit + integration tests.
 5. Performance smoke and RAG evaluator gate.
@@ -233,10 +233,10 @@ Backend language/runtime baseline for this project is `Go 1.26.1`.
 
 | Requirement                         | Design Decision                                                        | Section |
 | ----------------------------------- | ---------------------------------------------------------------------- | ------- |
-| Multi-tenant isolation              | Mandatory tenant context in API, repos, Milvus filters, MinIO prefixes | 3, 4    |
+| Multi-tenant isolation              | Mandatory tenant context in API, repos, Milvus filters, S3 prefixes    | 3, 4    |
 | Governed ingestion                  | Profiler + policy gate with approved/quarantine/rejected states        | 3       |
 | Vector store Milvus                 | Tenant-filtered vector retrieval with rerank pipeline                  | 3, 4    |
-| Blob store MinIO                    | Tenant-scoped object pathing and lifecycle management                  | 3, 4, 7 |
+| Blob store S3                       | Tenant-scoped object pathing and lifecycle management                  | 3, 4, 7 |
 | AI gateway Portkey + Qwen embedding | Adapter-based AI layer with sidecar embedding route                    | 2, 3    |
 | Async ingestion before Temporal     | Queue orchestrator + workers + idempotency + DLQ                       | 3, 8    |
 | Lightweight ingestion and search UIs | Two React + Vite frontends with dashboard/search boundaries             | 2, 5    |

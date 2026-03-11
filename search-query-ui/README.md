@@ -31,4 +31,4 @@ npm run build
 docker compose up -d search-query-ui
 ```
 
-Served at `http://localhost:14174`.
+Served by the `search-query-ui` service defined in `docker-compose.yml`.

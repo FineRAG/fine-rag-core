@@ -205,9 +205,6 @@ func (s *Server) handlePresign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := strings.TrimRight(s.cfg.UploadBaseURL, "/")
-	if base == "" {
-		base = "http://localhost:19000"
-	}
 	items := make([]map[string]any, 0, len(req.Files))
 	for _, file := range req.Files {
 		if file.Size <= 0 {
@@ -887,23 +884,23 @@ func (s *Server) handlePurgeTenantData(w http.ResponseWriter, r *http.Request) {
 
 	deletedObjects := 0
 	prefix := tenantID + "/"
-	p := s3.NewListObjectsV2Paginator(s.minio, &s3.ListObjectsV2Input{
+	p := s3.NewListObjectsV2Paginator(s.objectStore, &s3.ListObjectsV2Input{
 		Bucket: &s.cfg.UploadBucket,
 		Prefix: &prefix,
 	})
 	for p.HasMorePages() {
 		page, err := p.NextPage(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "minio_list_failed", err.Error())
+			writeError(w, http.StatusInternalServerError, "object_store_list_failed", err.Error())
 			return
 		}
 		for _, item := range page.Contents {
 			if item.Key == nil || strings.TrimSpace(*item.Key) == "" {
 				continue
 			}
-			_, delErr := s.minio.DeleteObject(r.Context(), &s3.DeleteObjectInput{Bucket: &s.cfg.UploadBucket, Key: item.Key})
+			_, delErr := s.objectStore.DeleteObject(r.Context(), &s3.DeleteObjectInput{Bucket: &s.cfg.UploadBucket, Key: item.Key})
 			if delErr != nil {
-				writeError(w, http.StatusInternalServerError, "minio_delete_failed", delErr.Error())
+				writeError(w, http.StatusInternalServerError, "object_store_delete_failed", delErr.Error())
 				return
 			}
 			deletedObjects++
@@ -1057,7 +1054,7 @@ func splitCamelCase(input string) string {
 }
 
 func (s *Server) indexPayloadArtifacts(ctx context.Context, tenantID contracts.TenantID, jobID string, checksum string, fallbackSourceURI string, payload map[string]any) (int, int, error) {
-	if s.index == nil || s.minio == nil {
+	if s.index == nil || s.objectStore == nil {
 		return 0, 0, nil
 	}
 	objectKeys := readStringArray(payload["objectKeys"])
@@ -1102,7 +1099,7 @@ func (s *Server) indexPayloadArtifacts(ctx context.Context, tenantID contracts.T
 			continue
 		}
 		input := &s3.GetObjectInput{Bucket: &s.cfg.UploadBucket, Key: &key}
-		object, err := s.minio.GetObject(ctx, input)
+		object, err := s.objectStore.GetObject(ctx, input)
 		if err != nil {
 			return 0, 0, fmt.Errorf("read object %q: %w", key, err)
 		}

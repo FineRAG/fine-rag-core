@@ -13,6 +13,7 @@ import (
 
 	"enterprise-go-rag/internal/backend"
 	"enterprise-go-rag/internal/logging"
+	"enterprise-go-rag/internal/telemetry"
 
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
@@ -23,6 +24,18 @@ func main() {
 		panic("failed to initialize zap logger: " + err.Error())
 	}
 	defer logging.Sync()
+
+	shutdownTelemetry, err := telemetry.Init(context.Background())
+	if err != nil {
+		logging.Logger.Fatal("failed to initialize telemetry", zap.Error(err))
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			logging.Logger.Warn("failed to shutdown telemetry cleanly", zap.Error(err))
+		}
+	}()
 
 	cfg := backend.ConfigFromEnv()
 
@@ -46,7 +59,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           srv.Handler(),
+		Handler:           telemetry.WrapHandler("http.server", srv.Handler()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
