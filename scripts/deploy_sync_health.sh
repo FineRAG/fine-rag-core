@@ -79,6 +79,18 @@ fi
 echo "== Syncing workspace to ${USER_HOST}:${REMOTE_PATH} =="
 rsync "${RSYNC_OPTS[@]}" -e "ssh ${SSH_OPTS[*]}" "${ROOT_DIR}/" "${USER_HOST}:${REMOTE_PATH}/"
 
+# Sync sibling UI repos so docker compose build contexts (../fine-rag-*-ui) resolve on EC2
+MONOREPO_ROOT="$(cd "${ROOT_DIR}/.." && pwd)"
+REMOTE_PARENT="$(dirname "${REMOTE_PATH}")"
+
+for UI_REPO in fine-rag-ingestion-ui fine-rag-query-ui; do
+  LOCAL_UI="${MONOREPO_ROOT}/${UI_REPO}"
+  if [[ -d "${LOCAL_UI}" ]]; then
+    echo "== Syncing UI repo ${UI_REPO} to ${USER_HOST}:${REMOTE_PARENT}/${UI_REPO} =="
+    rsync "${RSYNC_OPTS[@]}" -e "ssh ${SSH_OPTS[*]}" "${LOCAL_UI}/" "${USER_HOST}:${REMOTE_PARENT}/${UI_REPO}/"
+  fi
+done
+
 echo "== Running remote docker compose deployment =="
 ssh "${SSH_OPTS[@]}" "$USER_HOST" "REMOTE_PATH='$REMOTE_PATH' COMPOSE_FILE='$COMPOSE_FILE' bash -s" <<'REMOTE'
 set -euo pipefail
