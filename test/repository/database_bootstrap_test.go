@@ -22,7 +22,7 @@ func TestDatabaseURLValidationCoversMissingAndMalformedCases(t *testing.T) {
 		t.Fatal("expected invalid DB URL scheme error")
 	}
 
-	valid := runtimecfg.DatabaseConfig{Provider: "postgres", URL: "postgres://user:pass@aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"}
+	valid := runtimecfg.DatabaseConfig{Provider: "postgres", URL: "postgres://user:pass@db.example.com:5432/postgres?sslmode=require"}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("expected valid DB config, got: %v", err)
 	}

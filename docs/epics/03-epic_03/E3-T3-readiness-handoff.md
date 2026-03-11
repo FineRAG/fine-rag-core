@@ -11,7 +11,7 @@ Status: Ready for execution handoff
 |---|---|---|---|
 | Deployment | Deploy path documented and script-driven (`rsync` + `docker compose`) | DeploymentAgent | `scripts/deploy_sync_health.sh` execution with PASS outcome and `scripts/check_stack.sh` health PASS |
 | Rollback | Rollback path defined for `dev` baseline and feature rollback | DeploymentAgent | `scripts/git_task_flow.sh merge-dev ...` plus manual fallback: redeploy previous `dev` commit via `scripts/deploy_sync_health.sh` |
-| DR | Recovery baseline captured (remote sync + compose rebuild + health checks) | Ops owner (`ubuntu@ec2-3-7-70-60.ap-south-1.compute.amazonaws.com`) | `scripts/deploy_sync_health.sh` full run includes pull/build/up and stack checks |
+| DR | Recovery baseline captured (remote sync + compose rebuild + health checks) | Ops owner (`ubuntu@<YOUR_EC2_HOST>`) | `scripts/deploy_sync_health.sh` full run includes pull/build/up and stack checks |
 | Security Review | Governance and security checks executed for task scope | SecurityGovAgent | `scripts/securitygov_review.sh 'E3-T3|Operability|Readiness|Handoff|Deployment|Rollback|Runbook|Incident|DLQ'` PASS |
 | Validation | Task validation commands for artifact/link presence completed | TestingAgent | `ls` validation command PASS for all epic planning docs and added readiness artifact |
 | Failure Recovery | DLQ replay and queue recovery reference mapped for operators | CodingAgent + Ops | `internal/services/ingestion/service.go` worker flow + `docs/epics/03-epic_03/03-3E-Task.md` notes and runbook links |
