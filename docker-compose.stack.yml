@@ -13,7 +13,7 @@ services:
       FINE_RAG_RATE_LIMIT_PER_MIN: "240"
       FINE_RAG_DB_PROVIDER: "postgres"
       FINE_RAG_DATABASE_URL_FILE: /run/secrets/finerag_database_url
-      FINE_RAG_VECTOR_PROVIDER: "milvus"
+      FINE_RAG_VECTOR_PROVIDER: "stub"
       FINE_RAG_MILVUS_ENDPOINT_FILE: /run/secrets/finerag_milvus_endpoint
       FINE_RAG_MILVUS_DATABASE: "finerag"
       FINE_RAG_MILVUS_COLLECTION: "tenant_vectors"
