@@ -2,7 +2,7 @@ services:
   finerag-backend:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: backend/Dockerfile
     container_name: finerag-backend
     restart: unless-stopped
     environment:
@@ -60,9 +60,10 @@ services:
       - finerag_milvus_password
       - finerag_milvus_token
 
-  ingestion-dashboard-ui:
+  fine-rag-ingestion-ui:
     build:
-      context: ./ingestion-dashboard-ui
+      context: ../fine-rag-ingestion-ui
+      dockerfile: Dockerfile
     container_name: finerag-ingestion-dashboard-ui
     restart: unless-stopped
     ports:
@@ -70,9 +71,10 @@ services:
     depends_on:
       - finerag-backend
 
-  search-query-ui:
+  fine-rag-query-ui:
     build:
-      context: ./search-query-ui
+      context: ../fine-rag-query-ui
+      dockerfile: Dockerfile
     container_name: finerag-search-query-ui
     restart: unless-stopped
     ports:
