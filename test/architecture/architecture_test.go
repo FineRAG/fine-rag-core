@@ -113,6 +113,7 @@ func TestArchitectureRulesDocumented(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected architecture dependency map at %s: %v", path, err)
 	}
+
 }
 
 func TestArchitectureNoCrossServiceImports(t *testing.T) {
