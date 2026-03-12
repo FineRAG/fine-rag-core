@@ -9,6 +9,16 @@
 
 ---
 
+## Live Application
+
+<p align="center">
+  <strong>Try it now:</strong><br/>
+  <a href="https://dash-finer.shafeeq.dev"><strong>Ingestion Dashboard</strong></a> &nbsp;|&nbsp;
+  <a href="https://finer.shafeeq.dev"><strong>Query UI</strong></a>
+</p>
+
+---
+
 > **About this project** — I designed and built this system end-to-end as a solo architect/engineer to demonstrate how I approach production AI infrastructure. Every layer — from the hexagonal backend to the tenant-isolated vector pipeline to the streaming SSE search — reflects the kind of system-level thinking I bring to an AI architect role. The codebase is not a tutorial clone; it is an opinionated, security-first platform that could ship to production.
 
 ---
@@ -443,11 +453,11 @@ docker compose up -d --build
 
 ### Endpoints
 
-| Service | URL |
-|---------|-----|
-| Backend API | `http://localhost:18080` |
-| Ingestion Dashboard | `http://localhost:14173` |
-| Search Query UI | `http://localhost:14174` |
+| Service | Local | Production |
+|---------|-------|------------|
+| Backend API | `http://localhost:18080` | `https://api.finer.shafeeq.dev` |
+| Ingestion Dashboard | `http://localhost:14173` | `https://dash-finer.shafeeq.dev` |
+| Search Query UI | `http://localhost:14174` | `https://finer.shafeeq.dev` |
 
 ### Run Tests
 
