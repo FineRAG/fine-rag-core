@@ -492,6 +492,17 @@ type RetrievalQuery struct {
 	TopK      int
 }
 
+type MetadataFilters struct {
+	Category  string `json:"category"`
+	DateRange string `json:"date_range"`
+	Priority  *int   `json:"priority"`
+}
+
+type StructuredQuery struct {
+	ExpandedQueries []string        `json:"expanded_queries"`
+	MetadataFilters MetadataFilters `json:"metadata_filters"`
+}
+
 func (q RetrievalQuery) Validate() error {
 	if err := q.TenantID.Validate(); err != nil {
 		return err
@@ -699,7 +710,7 @@ type VectorEmbeddingSearcher interface {
 }
 
 type QueryRewriter interface {
-	RewriteQuery(ctx context.Context, tenantID TenantID, originalQuery string) (string, error)
+	RewriteQuery(ctx context.Context, tenantID TenantID, originalQuery string) (StructuredQuery, error)
 }
 
 type Reranker interface {
