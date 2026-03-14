@@ -91,13 +91,28 @@ for UI_REPO in fine-rag-ingestion-ui fine-rag-query-ui; do
   fi
 done
 
+# Sync secrets directory explicitly (bypassing .gitignore)
+if [[ -d "${ROOT_DIR}/secrets" ]]; then
+  echo "== Syncing secrets to ${USER_HOST}:${REMOTE_PATH}/secrets =="
+  # Ensure remote secrets directory exists
+  ssh "${SSH_OPTS[@]}" "$USER_HOST" "mkdir -p '${REMOTE_PATH}/secrets'"
+  # Sync secrets (no --delete to avoid nuking remote-only secrets if any)
+  rsync -az -e "ssh ${SSH_OPTS[*]}" "${ROOT_DIR}/secrets/" "${USER_HOST}:${REMOTE_PATH}/secrets/"
+fi
+
 echo "== Running remote docker compose deployment =="
-ssh "${SSH_OPTS[@]}" "$USER_HOST" "REMOTE_PATH='$REMOTE_PATH' COMPOSE_FILE='$COMPOSE_FILE' bash -s" <<'REMOTE'
-set -euo pipefail
-cd "$REMOTE_PATH"
-docker compose -f "$COMPOSE_FILE" pull
-docker compose -f "$COMPOSE_FILE" build
-docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+ssh "${SSH_OPTS[@]}" "$USER_HOST" "bash -s" <<REMOTE
+set -e
+set -u
+set -o pipefail
+
+export REMOTE_PATH='$REMOTE_PATH'
+export COMPOSE_FILE='$COMPOSE_FILE'
+
+cd "\$REMOTE_PATH"
+docker compose -f "\$COMPOSE_FILE" pull
+docker compose -f "\$COMPOSE_FILE" build
+docker compose -f "\$COMPOSE_FILE" up -d --remove-orphans
 
 if [[ -x "scripts/migration_bootstrap.sh" ]]; then
   echo "== Running migration bootstrap precheck =="
@@ -107,7 +122,7 @@ else
 fi
 
 echo "== Compose status =="
-docker compose -f "$COMPOSE_FILE" ps
+docker compose -f "\$COMPOSE_FILE" ps
 REMOTE
 
 echo "== Running stack health checks =="

@@ -54,14 +54,16 @@ type staticQueryRewriter struct {
 	rewritten string
 }
 
-func (s staticQueryRewriter) RewriteQuery(_ context.Context, _ contracts.TenantID, _ string) (string, error) {
-	return s.rewritten, nil
+func (s staticQueryRewriter) RewriteQuery(_ context.Context, _ contracts.TenantID, _ string) (contracts.StructuredQuery, error) {
+	return contracts.StructuredQuery{
+		ExpandedQueries: []string{s.rewritten},
+	}, nil
 }
 
 type failingQueryRewriter struct{}
 
-func (f failingQueryRewriter) RewriteQuery(_ context.Context, _ contracts.TenantID, _ string) (string, error) {
-	return "", errors.New("empty query rewrite response")
+func (f failingQueryRewriter) RewriteQuery(_ context.Context, _ contracts.TenantID, _ string) (contracts.StructuredQuery, error) {
+	return contracts.StructuredQuery{}, errors.New("empty query rewrite response")
 }
 
 type deterministicReranker struct {
@@ -292,14 +294,13 @@ func TestRetrievalExpandsEducationQueryWhenRewriteFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
+	// Heuristic expansion is removed; fallback should just embed original query
 	if len(embedder.lastChunks) != 1 {
 		t.Fatalf("expected one embedded query chunk, got %d", len(embedder.lastChunks))
 	}
 	got := embedder.lastChunks[0]
-	for _, expected := range []string{"shafeeq", "education", "qualification", "cgpa", "gpa", "degree", "university"} {
-		if !containsToken(got, expected) {
-			t.Fatalf("expected expanded query to include %q, got %q", expected, got)
-		}
+	if !strings.Contains(strings.ToLower(got), "shafeeq") {
+		t.Fatalf("expected fallback to include original query, got %q", got)
 	}
 	if searcher.embeddingCalls != 1 {
 		t.Fatalf("expected embedding search call, got %d", searcher.embeddingCalls)
