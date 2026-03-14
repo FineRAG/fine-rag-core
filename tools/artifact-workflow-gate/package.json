@@ -1,0 +1,112 @@
+{
+  "name": "artifact-workflow-gate",
+  "displayName": "Artifact Workflow Gate",
+  "description": "Proceed-gated markdown artifact workflow with unresolved comment count integration.",
+  "version": "0.1.0",
+  "publisher": "shafeeq-finerag",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FineRAG/fine-rag-core.git"
+  },
+  "engines": {
+    "vscode": "^1.97.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:markdown",
+    "onCommand:artifactWorkflow.proceed",
+    "onCommand:artifactWorkflow.refresh"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Artifact Workflow Gate",
+      "properties": {
+        "artifactWorkflow.blockProceedWithUnresolved": {
+          "type": "boolean",
+          "default": true,
+          "description": "Block proceed when unresolved comments exist for the active file."
+        },
+        "artifactWorkflow.commentsFilename": {
+          "type": "string",
+          "default": "comments.json",
+          "description": "Comments file produced by a Comments API extension (for example textfile-comments)."
+        },
+        "artifactWorkflow.autoUpdateGateFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically check proceed boxes in .ai/reviews gate files when allowed."
+        },
+        "artifactWorkflow.mode": {
+          "type": "string",
+          "enum": ["manual", "agent-decides", "auto"],
+          "default": "manual",
+          "description": "Proceed mode. manual = ask confirmation, agent-decides = prompt-based, auto = proceed when no unresolved comments."
+        },
+        "artifactWorkflow.commentSource": {
+          "type": "string",
+          "enum": ["auto", "textfile-comments", "markdown-docs"],
+          "default": "auto",
+          "description": "Where unresolved comments are read from. auto = combine textfile-comments and markdown-docs directives."
+        },
+        "artifactWorkflow.autoInvokeCopilot": {
+          "type": "boolean",
+          "default": false,
+          "description": "Best-effort behavior to open Chat and prepare current-stage agent prompt when proceed is blocked by comments."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "artifactWorkflow.proceed",
+        "title": "Proceed"
+      },
+      {
+        "command": "artifactWorkflow.refresh",
+        "title": "Refresh Review Count"
+      },
+      {
+        "command": "artifactWorkflow.openCommentsFile",
+        "title": "Open Comments File"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "artifactWorkflow.proceed",
+          "group": "navigation@100",
+          "when": "resourceLangId == markdown"
+        },
+        {
+          "command": "artifactWorkflow.refresh",
+          "group": "navigation@101",
+          "when": "resourceLangId == markdown"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "artifactWorkflow.proceed"
+        },
+        {
+          "command": "artifactWorkflow.refresh"
+        },
+        {
+          "command": "artifactWorkflow.openCommentsFile"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.97.0",
+    "typescript": "^5.6.3",
+    "@vscode/vsce": "^3.2.2"
+  }
+}
