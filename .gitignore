@@ -1,27 +1,42 @@
-# Development workflow artifacts kept local or in separate tooling repo
-# Dev tooling and agent workflow — lives in fine-rag-devtools private repo
-.ai/
-.github/
-scripts/
-tools/
+# Go
+*.out
+*.test
+*.swp
+*.swo
+*~
+.DS_Store
 
-# Planning and design docs — lives in fine-rag-devtools private repo
-docs/epics/
-docs/architecture/
-docs/distilled_requirements*.md
-docs/system_design*.md
-docs/workflow_review.md
-docs/workflow_review_guide.md
+# Build artifacts
+bin/
+dist/
 
-# Cloud deployment and host-specific proxy files (local only; never commit)
-run_stack_with_tunnel.sh
-cloud-apps.conf
-setup_cloud_proxy.sh
+# IDE
+.vscode/
+.idea/
+*.iml
 
-# Local Docker secrets material
-secrets/*.txt
+# Dependencies
+vendor/
 
-# Environment variable files (may contain credentials)
+# Environment
 .env
-.env.*
-*.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Secrets
+secrets/
+.secrets/
+
+# Docker
+.dockerignore
+
+# Test coverage
+*.cover
+coverage.txt
+
+# Build outputs
+/build/

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"enterprise-go-rag/internal/backend"
+	"enterprise-go-rag/backend"
 	"enterprise-go-rag/internal/logging"
 	"enterprise-go-rag/internal/telemetry"
 
