@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"fmt"
+	"log"
 	"os"
 
 	_ "github.com/lib/pq"
@@ -22,7 +22,7 @@ func main() {
 	api := os.Getenv("BOOTSTRAP_API")
 
 	if dsn == "" || user == "" || pass == "" || api == "" {
-		fmt.Fprintln(os.Stderr, "required env: DATABASE_URL, BOOTSTRAP_USER, BOOTSTRAP_PASS, BOOTSTRAP_API")
+		log.Println("required env: DATABASE_URL, BOOTSTRAP_USER, BOOTSTRAP_PASS, BOOTSTRAP_API")
 		os.Exit(1)
 	}
 
@@ -49,8 +49,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		fmt.Println("bootstrap user inserted")
+		log.Println("bootstrap user inserted")
 	} else {
-		fmt.Printf("bootstrap user updated (rows=%d)\n", n)
+		log.Printf("bootstrap user updated (rows=%d)\n", n)
 	}
 }
