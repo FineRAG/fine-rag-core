@@ -111,6 +111,9 @@ func (c *EmbeddingClient) embedWithModel(ctx context.Context, input []string, mo
 		"input":           input,
 		"encoding_format": "float",
 	}
+	if providerUserID, ok := contracts.ProviderUserIDFromContext(ctx); ok {
+		body["user"] = providerUserID
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
