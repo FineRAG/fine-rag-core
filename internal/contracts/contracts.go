@@ -32,6 +32,7 @@ var (
 )
 
 type tenantContextKey struct{}
+type actorContextKey struct{}
 
 func (c TenantContext) Validate() error {
 	if err := c.TenantID.Validate(); err != nil {
@@ -100,6 +101,68 @@ func EnsureTenantMatch(ctx context.Context, tenantID TenantID) error {
 	}
 
 	return nil
+}
+
+func WithActorID(ctx context.Context, actorID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	trimmed := strings.TrimSpace(actorID)
+	if trimmed == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, actorContextKey{}, trimmed)
+}
+
+func ActorIDFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	raw := ctx.Value(actorContextKey{})
+	if raw == nil {
+		return "", false
+	}
+	actorID, ok := raw.(string)
+	if !ok {
+		return "", false
+	}
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return "", false
+	}
+	return actorID, true
+}
+
+func ProviderUserIDFromContext(ctx context.Context) (string, bool) {
+	actorID, ok := ActorIDFromContext(ctx)
+	if !ok {
+		return "", false
+	}
+	tenantContext, err := TenantContextFromContext(ctx)
+	if err != nil || strings.TrimSpace(string(tenantContext.TenantID)) == "" {
+		return normalizeProviderUserPart(actorID), true
+	}
+	actorPart := normalizeProviderUserPart(actorID)
+	tenantPart := normalizeProviderUserPart(string(tenantContext.TenantID))
+	if actorPart == "" {
+		return tenantPart, tenantPart != ""
+	}
+	if tenantPart == "" {
+		return actorPart, true
+	}
+	return actorPart + "_" + tenantPart, true
+}
+
+func normalizeProviderUserPart(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.Fields(trimmed)
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "_")
 }
 
 type AuthClaims struct {
