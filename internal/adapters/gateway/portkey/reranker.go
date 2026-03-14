@@ -1,9 +1,13 @@
 package portkey
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +43,8 @@ type Config struct {
 	CircuitFailureThreshold int
 	FallbackMode            string
 	DirectAllowlist         []string
+	Model                   string
+	ProviderKey             string
 	NowMillis               func() int64
 }
 
@@ -60,7 +66,7 @@ func NewRerankerAdapter(cfg Config) (*RerankerAdapter, error) {
 		return nil, errors.New("FINE_RAG_PORTKEY_API_KEY is required when FINE_RAG_GATEWAY_PROVIDER=portkey")
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 250 * time.Millisecond
+		cfg.Timeout = 12 * time.Second
 	}
 	if cfg.RetryMax < 0 {
 		cfg.RetryMax = 0
@@ -77,7 +83,16 @@ func NewRerankerAdapter(cfg Config) (*RerankerAdapter, error) {
 	if err := validateFallbackMode(cfg.FallbackMode); err != nil {
 		return nil, err
 	}
-	return &RerankerAdapter{cfg: cfg, client: failingClient{}}, nil
+	return &RerankerAdapter{
+		cfg:    cfg,
+		client: &portkeyRerankClient{
+			apiKey:      cfg.APIKey,
+			baseURL:     cfg.BaseURL,
+			model:       cfg.Model,
+			providerKey: cfg.ProviderKey,
+			httpClient:  &http.Client{Timeout: cfg.Timeout},
+		},
+	}, nil
 }
 
 func NewStubReranker() contracts.Reranker {
@@ -251,4 +266,91 @@ type failingClient struct{}
 
 func (failingClient) Rerank(_ context.Context, _ RerankRequest) ([]contracts.RerankCandidate, TokenUsage, error) {
 	return nil, TokenUsage{}, errors.New("portkey unavailable")
+}
+
+type portkeyRerankClient struct {
+	apiKey      string
+	baseURL     string
+	model       string
+	providerKey string
+	httpClient  *http.Client
+}
+
+func (c *portkeyRerankClient) Rerank(ctx context.Context, req RerankRequest) ([]contracts.RerankCandidate, TokenUsage, error) {
+	texts := make([]string, 0, len(req.Candidates))
+	for _, cand := range req.Candidates {
+		texts = append(texts, cand.Text)
+	}
+
+	modelName := c.model
+	if modelName == "" {
+		modelName = "portkey-rerank"
+	}
+
+	body := map[string]any{
+		"model":     modelName,
+		"query":     req.QueryText,
+		"documents": texts,
+	}
+	if req.TopN > 0 {
+		body["top_n"] = req.TopN
+	}
+
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, TokenUsage{}, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.baseURL, "/")+"/v1/rerank", bytes.NewReader(raw))
+	if err != nil {
+		return nil, TokenUsage{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-portkey-api-key", strings.TrimSpace(c.apiKey))
+	if c.providerKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+strings.TrimSpace(c.providerKey))
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, TokenUsage{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		rawErr, _ := io.ReadAll(resp.Body)
+		return nil, TokenUsage{}, fmt.Errorf("portkey rerank failed: status=%d body=%s", resp.StatusCode, string(rawErr))
+	}
+
+	var payload struct {
+		Results []struct {
+			Index          int     `json:"index"`
+			RelevanceScore float64 `json:"relevance_score"`
+		} `json:"results"`
+		Usage struct {
+			TotalTokens int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, TokenUsage{}, err
+	}
+
+	if len(payload.Results) == 0 {
+		return nil, TokenUsage{}, errors.New("empty rerank response")
+	}
+
+	out := make([]contracts.RerankCandidate, 0, len(payload.Results))
+	for _, res := range payload.Results {
+		if res.Index < 0 || res.Index >= len(req.Candidates) {
+			continue
+		}
+		orig := req.Candidates[res.Index]
+		out = append(out, contracts.RerankCandidate{
+			DocumentID: orig.DocumentID,
+			Text:       orig.Text,
+			Score:      res.RelevanceScore,
+		})
+	}
+
+	return out, TokenUsage{Total: payload.Usage.TotalTokens}, nil
 }
