@@ -75,6 +75,9 @@ func (c *ChatClient) GenerateAnswer(ctx context.Context, query string, contextTe
 		"temperature": 0.1,
 		"max_tokens":  512,
 	}
+	if providerUserID, ok := contracts.ProviderUserIDFromContext(ctx); ok {
+		body["user"] = providerUserID
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return "", err
@@ -146,6 +149,9 @@ func (c *ChatClient) RewriteQuery(ctx context.Context, tenantID contracts.Tenant
 		},
 		"temperature": 0.0,
 		"max_tokens":  96,
+	}
+	if providerUserID, ok := contracts.ProviderUserIDFromContext(ctx); ok {
+		body["user"] = providerUserID
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
