@@ -6,6 +6,7 @@ FineR is an enterprise RAG platform built in Go for teams that need speed, contr
 
 ## Why FineR? 🧠
 
+
 `[PAIN-KILLER]` `[#LessRework]` `[#FasterRollout]`
 
 - 🔁 No more rebuilding pipelines every quarter due to data quality drift.

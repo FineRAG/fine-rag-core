@@ -13,7 +13,7 @@ Usage:
 
 Examples:
   scripts/check_stack.sh ubuntu@1.2.3.4 /home/ubuntu/projects/finerag /path/key.pem
-  scripts/check_stack.sh ubuntu@1.2.3.4 /home/ubuntu/projects/finerag /path/key.pem docker-compose.stack.yml
+  scripts/check_stack.sh ubuntu@1.2.3.4 /home/ubuntu/projects/finerag /path/key.pem docker-compose.yml
 USAGE
 }
 
@@ -25,7 +25,7 @@ fi
 USER_HOST="$1"
 REMOTE_PATH="$2"
 SSH_KEY_PATH="${3:-}"
-COMPOSE_FILE="${4:-docker-compose.stack.yml}"
+COMPOSE_FILE="${4:-docker-compose.yml}"
 
 ssh_opts=(-o StrictHostKeyChecking=accept-new)
 if [[ -n "$SSH_KEY_PATH" ]]; then
@@ -76,10 +76,10 @@ check_cmd() {
 
 echo "== Endpoint and Dependency Health =="
 check_cmd "Backend health endpoint" bash -lc 'for i in {1..15}; do curl -fsS http://localhost:18080/healthz >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
-if grep -xq "ingestion-dashboard-ui" <<<"$expected_services"; then
+if grep -xq "fine-rag-ingestion-ui" <<<"$expected_services"; then
   check_cmd "Ingestion UI port open (14173)" bash -lc "</dev/tcp/127.0.0.1/14173"
 fi
-if grep -xq "search-query-ui" <<<"$expected_services"; then
+if grep -xq "fine-rag-query-ui" <<<"$expected_services"; then
   check_cmd "Search UI port open (14174)" bash -lc "</dev/tcp/127.0.0.1/14174"
 fi
 if grep -xq "milvus" <<<"$expected_services"; then

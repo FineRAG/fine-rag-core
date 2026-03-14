@@ -7,7 +7,7 @@ set -euo pipefail
 DEFAULT_USER_HOST="ubuntu@ec2-3-7-70-60.ap-south-1.compute.amazonaws.com"
 DEFAULT_REMOTE_PATH="/home/ubuntu/projects/finerag"
 DEFAULT_SSH_KEY_PATH="/Users/shafeeq/Documents/01-New-Job/Prep/ai-serv/lul-mul-tul.pem"
-DEFAULT_COMPOSE_FILE="docker-compose.stack.yml"
+DEFAULT_COMPOSE_FILE="docker-compose.yml"
 
 usage() {
   cat <<'USAGE'
@@ -16,7 +16,7 @@ Usage:
 
 Examples:
   scripts/deploy_sync_health.sh
-  scripts/deploy_sync_health.sh ubuntu@ec2-3-7-70-60.ap-south-1.compute.amazonaws.com /home/ubuntu/projects/finerag /Users/shafeeq/Documents/01-New-Job/Prep/ai-serv/lul-mul-tul.pem docker-compose.stack.yml
+  scripts/deploy_sync_health.sh ubuntu@ec2-3-7-70-60.ap-south-1.compute.amazonaws.com /home/ubuntu/projects/finerag /Users/shafeeq/Documents/01-New-Job/Prep/ai-serv/lul-mul-tul.pem docker-compose.yml
 
 Environment:
   RSYNC_DELETE=true|false   Default: true
