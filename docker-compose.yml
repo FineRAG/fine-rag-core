@@ -26,7 +26,11 @@ services:
       FINE_RAG_PORTKEY_API_KEY_FILE: /run/secrets/finerag_portkey_api_key
       FINE_RAG_OPENROUTER_API_KEY_FILE: /run/secrets/finerag_openrouter_api_key
       FINE_RAG_OPENROUTER_MODEL: "@groq-key/openai/gpt-oss-120b"
+      FINE_RAG_RERANK_MODEL: "rerank-v4.0-pro"
+      FINE_RAG_RERANKER_PROVIDER: "cohere"
+      FINE_RAG_COHERE_API_KEY_FILE: /run/secrets/finerag_cohere_api_key
       FINE_RAG_OPENROUTER_EMBEDDING_MODEL: "@openrouter-key/nvidia/llama-nemotron-embed-vl-1b-v2:free"
+      FINE_RAG_ENABLE_QUERY_REWRITE: "false"
       FINE_RAG_LLM_TIMEOUT: "12s"
       FINE_RAG_OPENROUTER_MIN_INTERVAL: "900ms"
       FINE_RAG_OPENROUTER_RETRY_MAX: "3"
@@ -58,6 +62,7 @@ services:
       - finerag_bootstrap_secondary_username
       - finerag_bootstrap_secondary_password
       - finerag_portkey_api_key
+      - finerag_cohere_api_key
       - finerag_openrouter_api_key
       - finerag_milvus_endpoint
       - finerag_milvus_username
@@ -102,6 +107,8 @@ secrets:
     file: ./secrets/finerag_bootstrap_secondary_password.txt
   finerag_portkey_api_key:
     file: ./secrets/finerag_portkey_api_key.txt
+  finerag_cohere_api_key:
+    file: ./secrets/finerag_cohere_api_key.txt
   finerag_openrouter_api_key:
     file: ./secrets/finerag_openrouter_api_key.txt
   finerag_milvus_endpoint:

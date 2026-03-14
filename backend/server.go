@@ -22,6 +22,7 @@ import (
 
 	"enterprise-go-rag/internal/adapters/gateway/portkey"
 	"enterprise-go-rag/internal/contracts"
+	"enterprise-go-rag/internal/logging"
 	"enterprise-go-rag/internal/repository"
 	"enterprise-go-rag/internal/runtime"
 	"enterprise-go-rag/internal/services/retrieval"
@@ -29,6 +30,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"go.uber.org/zap"
 )
 
 type Config struct {
@@ -190,7 +192,7 @@ func ConfigFromEnv() Config {
 			chunkOverlapWords = parsed
 		}
 	}
-	enableQueryRewrite := false
+	enableQueryRewrite := true
 	if raw := strings.TrimSpace(os.Getenv("FINE_RAG_ENABLE_QUERY_REWRITE")); raw != "" {
 		enableQueryRewrite = strings.EqualFold(raw, "true") || raw == "1" || strings.EqualFold(raw, "yes")
 	}
@@ -448,6 +450,7 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 		}
 		allowed, err := s.userHasTenant(r.Context(), uid, tenantID)
 		if err != nil {
+			logging.Logger.Error("tenant check failed", zap.Error(err), zap.String("tenantID", tenantID), zap.Int64("userID", uid))
 			writeError(w, http.StatusInternalServerError, "tenant_check_failed", err.Error())
 			return
 		}
@@ -471,7 +474,6 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 
 func BuildRuntimeDependencies() (*sql.DB, contracts.AuditEventRepository, contracts.VectorIndex, *retrieval.DeterministicRetrievalService, error) {
 	dbCfg := runtime.LoadDatabaseConfigFromEnv(os.LookupEnv)
-	dbCfg.Provider = "postgres"
 	db, err := runtime.OpenPostgresDB(context.Background(), nil, dbCfg)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -483,10 +485,11 @@ func BuildRuntimeDependencies() (*sql.DB, contracts.AuditEventRepository, contra
 		return nil, nil, nil, nil, err
 	}
 	gatewayCfg := runtime.LoadGatewayConfigFromEnv(os.LookupEnv)
-	reranker, _, err := runtime.BuildGatewayReranker(gatewayCfg, func() int64 { return time.Now().UTC().UnixMilli() })
+	reranker, rerankerProvider, err := runtime.BuildGatewayReranker(gatewayCfg, func() int64 { return time.Now().UTC().UnixMilli() })
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	logging.Logger.Info("runtime.dependencies.reranker.initialized", zap.String("provider", rerankerProvider))
 	serverCfg := ConfigFromEnv()
 	var embedder contracts.EmbeddingProvider
 	var queryRewriter contracts.QueryRewriter
@@ -517,45 +520,93 @@ func BuildRuntimeDependencies() (*sql.DB, contracts.AuditEventRepository, contra
 			}
 		}
 	}
-	return db, auditRepo, index, retrieval.NewDeterministicRetrievalService(searcher, reranker, retrieval.Config{EmbeddingProvider: embedder, QueryRewriter: queryRewriter}), nil
+	return db, auditRepo, index, retrieval.NewDeterministicRetrievalService(searcher, reranker, retrieval.Config{
+		EmbeddingProvider: embedder,
+		QueryRewriter:     queryRewriter,
+		RerankTimeout:     gatewayCfg.Timeout,
+	}), nil
 }
 
 func (s *Server) EnsureBootstrapData(ctx context.Context) error {
-	user := envOrSecret("FINE_RAG_BOOTSTRAP_ADMIN_USERNAME", "")
-	pass := envOrSecret("FINE_RAG_BOOTSTRAP_ADMIN_PASSWORD", "")
-	apiKey := envOrSecret("FINE_RAG_BOOTSTRAP_ADMIN_API_KEY", "")
-	if user == "" || pass == "" || apiKey == "" {
+	adminUser := envOrSecret("FINE_RAG_BOOTSTRAP_ADMIN_USERNAME", "")
+	adminPass := envOrSecret("FINE_RAG_BOOTSTRAP_ADMIN_PASSWORD", "")
+	adminAPIKey := envOrSecret("FINE_RAG_BOOTSTRAP_ADMIN_API_KEY", "")
+	if adminUser == "" || adminPass == "" || adminAPIKey == "" {
 		return errors.New("bootstrap admin secrets are required via *_FILE or env")
 	}
-	tenantID := envOr("FINE_RAG_BOOTSTRAP_TENANT_ID", "tenant-a")
-	tenantName := envOr("FINE_RAG_BOOTSTRAP_TENANT_NAME", "Tenant A")
-	_, err := s.ensureBootstrapUserAssigned(ctx, user, pass, apiKey, tenantID)
-	if err != nil {
-		return err
-	}
+
 	repo := repository.NewPostgresTenantRegistryRepository(s.db, repository.PostgresConfig{})
-	tctx, err := contracts.WithTenantContext(ctx, contracts.TenantContext{TenantID: contracts.TenantID(tenantID), RequestID: "bootstrap"})
+
+	// Cleanup any stale/buggy tenant records from previous runs (IDs with spaces/irregular characters)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_tenants WHERE tenant_id LIKE '% %'`); err != nil {
+		logging.Logger.Warn("failed to cleanup stale user_tenants", zap.Error(err))
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM tenant_registry WHERE tenant_id LIKE '% %'`); err != nil {
+		logging.Logger.Warn("failed to cleanup stale tenant_registry", zap.Error(err))
+	}
+
+	// 1. Admin User Setup
+	adminUID, err := s.ensureBootstrapUser(ctx, adminUser, adminPass, adminAPIKey)
 	if err != nil {
 		return err
 	}
-	if err := repo.Upsert(tctx, contracts.TenantRecord{TenantID: contracts.TenantID(tenantID), DisplayName: tenantName, PlanTier: "starter", Active: true, UpdatedAt: time.Now().UTC()}); err != nil {
+	// Clear all existing assignments for Admin to ensure strict mapping
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_tenants WHERE user_id = $1`, adminUID); err != nil {
 		return err
 	}
-	secondaryUser := envOrSecret("FINE_RAG_BOOTSTRAP_SECONDARY_USERNAME", "")
+
+	adminTenants := []struct{ ID, Name string }{
+		{"tenant-a", "Tenant A"},
+		{"tenant-secondary", "Secondary Tenant"},
+	}
+	for _, t := range adminTenants {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO user_tenants (user_id, tenant_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, adminUID, t.ID); err != nil {
+			return err
+		}
+		tctx, err := contracts.WithTenantContext(ctx, contracts.TenantContext{TenantID: contracts.TenantID(t.ID), RequestID: "bootstrap-admin"})
+		if err != nil {
+			return err
+		}
+		if err := repo.Upsert(tctx, contracts.TenantRecord{TenantID: contracts.TenantID(t.ID), DisplayName: t.Name, PlanTier: "starter", Active: true, UpdatedAt: time.Now().UTC()}); err != nil {
+			return err
+		}
+	}
+
+	// 2. Secondary User (Jeetu) Setup
+	secondaryUsername := envOrSecret("FINE_RAG_BOOTSTRAP_SECONDARY_USERNAME", "")
 	secondaryPass := envOrSecret("FINE_RAG_BOOTSTRAP_SECONDARY_PASSWORD", "")
 	secondaryAPIKey := envOrSecret("FINE_RAG_BOOTSTRAP_SECONDARY_API_KEY", "")
-	if secondaryUser != "" || secondaryPass != "" || secondaryAPIKey != "" {
-		if secondaryUser == "" || secondaryPass == "" {
-			return errors.New("secondary bootstrap user requires username and password when enabled")
-		}
-		if _, err := s.ensureBootstrapUserAssigned(ctx, secondaryUser, secondaryPass, secondaryAPIKey, tenantID); err != nil {
+	if secondaryUsername != "" || secondaryPass != "" {
+		secondaryUID, err := s.ensureBootstrapUser(ctx, secondaryUsername, secondaryPass, secondaryAPIKey)
+		if err != nil {
 			return err
+		}
+		// Clear all existing assignments for Secondary User to ensure strict mapping
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM user_tenants WHERE user_id = $1`, secondaryUID); err != nil {
+			return err
+		}
+
+		jeetuTenants := []struct{ ID, Name string }{
+			{"tenant-lalita", "Lalita Tenant"},
+			{"tenant-jeetu", "Jeetu Tenant"},
+		}
+		for _, t := range jeetuTenants {
+			if _, err := s.db.ExecContext(ctx, `INSERT INTO user_tenants (user_id, tenant_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, secondaryUID, t.ID); err != nil {
+				return err
+			}
+			tctx, err := contracts.WithTenantContext(ctx, contracts.TenantContext{TenantID: contracts.TenantID(t.ID), RequestID: "bootstrap-jeetu"})
+			if err != nil {
+				return err
+			}
+			if err := repo.Upsert(tctx, contracts.TenantRecord{TenantID: contracts.TenantID(t.ID), DisplayName: t.Name, PlanTier: "starter", Active: true, UpdatedAt: time.Now().UTC()}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (s *Server) ensureBootstrapUserAssigned(ctx context.Context, username string, password string, apiKey string, tenantID string) (int64, error) {
+func (s *Server) ensureBootstrapUser(ctx context.Context, username string, password string, apiKey string) (int64, error) {
 	var userID int64
 	var apiKeyHash any
 	if strings.TrimSpace(apiKey) != "" {
@@ -568,14 +619,7 @@ SET password_hash = EXCLUDED.password_hash,
     api_key_hash = COALESCE(EXCLUDED.api_key_hash, app_users.api_key_hash),
     active = TRUE
 RETURNING id`, username, HashSecret(password), apiKeyHash).Scan(&userID)
-	if err != nil {
-		return 0, err
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO user_tenants (user_id, tenant_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, userID, tenantID)
-	if err != nil {
-		return 0, err
-	}
-	return userID, nil
+	return userID, err
 }
 
 func HashSecret(raw string) string {
