@@ -62,8 +62,8 @@ FineR is an enterprise RAG platform built in Go for teams that need speed, contr
 - 🐘 Database: PostgreSQL
 - 🌐 Model Gateway: Portkey
 - 🤖 LLM/Embeddings: OpenRouter-configured models
-- 📤 Ingestion UI: `ingestion-dashboard-ui`
-- 🔎 Search UI: `search-query-ui`
+- 📤 Ingestion UI Repo: `fine-rag-ingestion-ui`
+- 🔎 Search UI Repo: `fine-rag-query-ui`
 
 ## Local Quickstart in Minutes 🚦
 
