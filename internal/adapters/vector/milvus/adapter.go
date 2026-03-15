@@ -68,16 +68,21 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 		return nil, err
 	}
 	// Cloud Milvus endpoints can take longer than local instances during TLS+auth handshake.
-	connectCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	connectCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cli, err := mclient.NewClient(connectCtx, mclient.Config{
+	cliCfg := mclient.Config{
 		Address:       address,
-		Username:      strings.TrimSpace(cfg.Username),
-		Password:      strings.TrimSpace(cfg.Password),
 		DBName:        strings.TrimSpace(cfg.Database),
 		EnableTLSAuth: cfg.TLS,
-		APIKey:        strings.TrimSpace(cfg.Token),
-	})
+	}
+	// Prefer APIKey auth (Zilliz Cloud); fall back to username/password only when APIKey is absent.
+	if tok := strings.TrimSpace(cfg.Token); tok != "" {
+		cliCfg.APIKey = tok
+	} else {
+		cliCfg.Username = strings.TrimSpace(cfg.Username)
+		cliCfg.Password = strings.TrimSpace(cfg.Password)
+	}
+	cli, err := mclient.NewClient(connectCtx, cliCfg)
 	if err != nil {
 		return nil, vector.NormalizeProviderError("milvus", "connect", err)
 	}
