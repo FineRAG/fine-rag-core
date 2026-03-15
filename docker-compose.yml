@@ -1,0 +1,121 @@
+services:
+  finerag-backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: finerag-backend
+    restart: unless-stopped
+    environment:
+      FINE_RAG_HTTP_ADDR: ":8080"
+      FINE_RAG_JWT_SECRET_FILE: /run/secrets/finerag_jwt_secret
+      FINE_RAG_TOKEN_TTL: "8h"
+      FINE_RAG_ALLOWED_ORIGINS: "https://finer.shafeeq.dev,https://dash-finer.shafeeq.dev"
+      FINE_RAG_RATE_LIMIT_PER_MIN: "240"
+      FINE_RAG_DB_PROVIDER: "postgres"
+      FINE_RAG_DATABASE_URL_FILE: /run/secrets/finerag_database_url
+      FINE_RAG_VECTOR_PROVIDER: "milvus"
+      FINE_RAG_MILVUS_ENDPOINT_FILE: /run/secrets/finerag_milvus_endpoint
+      FINE_RAG_MILVUS_DATABASE: "finerag"
+      FINE_RAG_MILVUS_COLLECTION: "tenant_vectors"
+      FINE_RAG_MILVUS_USERNAME_FILE: /run/secrets/finerag_milvus_username
+      FINE_RAG_MILVUS_PASSWORD_FILE: /run/secrets/finerag_milvus_password
+      FINE_RAG_MILVUS_TOKEN_FILE: /run/secrets/finerag_milvus_token
+      FINE_RAG_MILVUS_TLS: "true"
+      FINE_RAG_GATEWAY_PROVIDER: "portkey"
+      FINE_RAG_PORTKEY_BASE_URL: "https://api.portkey.ai"
+      FINE_RAG_PORTKEY_API_KEY_FILE: /run/secrets/finerag_portkey_api_key
+      FINE_RAG_OPENROUTER_API_KEY_FILE: /run/secrets/finerag_openrouter_api_key
+      FINE_RAG_OPENROUTER_MODEL: "@groq-key/openai/gpt-oss-120b"
+      FINE_RAG_RERANK_MODEL: "rerank-v4.0-pro"
+      FINE_RAG_RERANKER_PROVIDER: "cohere"
+      FINE_RAG_COHERE_API_KEY_FILE: /run/secrets/finerag_cohere_api_key
+      FINE_RAG_OPENROUTER_EMBEDDING_MODEL: "@openrouter-key/nvidia/llama-nemotron-embed-vl-1b-v2:free"
+      FINE_RAG_ENABLE_QUERY_REWRITE: "false"
+      FINE_RAG_LLM_TIMEOUT: "12s"
+      FINE_RAG_OPENROUTER_MIN_INTERVAL: "900ms"
+      FINE_RAG_OPENROUTER_RETRY_MAX: "3"
+      FINE_RAG_CHUNK_SIZE_CHARS: "900"
+      FINE_RAG_CHUNK_OVERLAP_WORDS: "30"
+      OTEL_SERVICE_NAME: "finerag-backend"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      OTEL_EXPORTER_OTLP_HEADERS: "${OTEL_EXPORTER_OTLP_HEADERS:-}"
+      FINE_RAG_S3_BUCKET: "finerag-ingestion-prod"
+      FINE_RAG_S3_REGION: "ap-south-1"
+      FINE_RAG_S3_PRESIGN_TTL: "5m"
+      FINE_RAG_S3_MAX_OBJECT_BYTES: "20971520"
+      FINE_RAG_BOOTSTRAP_ADMIN_USERNAME_FILE: /run/secrets/finerag_bootstrap_admin_username
+      FINE_RAG_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/finerag_bootstrap_admin_password
+      FINE_RAG_BOOTSTRAP_ADMIN_API_KEY_FILE: /run/secrets/finerag_bootstrap_admin_api_key
+      FINE_RAG_BOOTSTRAP_SECONDARY_USERNAME_FILE: /run/secrets/finerag_bootstrap_secondary_username
+      FINE_RAG_BOOTSTRAP_SECONDARY_PASSWORD_FILE: /run/secrets/finerag_bootstrap_secondary_password
+      FINE_RAG_BOOTSTRAP_TENANT_ID: "tenant-a"
+      FINE_RAG_BOOTSTRAP_TENANT_NAME: "Tenant A"
+    ports:
+      - "18080:8080"
+    secrets:
+      - finerag_jwt_secret
+      - finerag_database_url
+      - finerag_bootstrap_admin_username
+      - finerag_bootstrap_admin_password
+      - finerag_bootstrap_admin_api_key
+      - finerag_bootstrap_secondary_username
+      - finerag_bootstrap_secondary_password
+      - finerag_portkey_api_key
+      - finerag_cohere_api_key
+      - finerag_openrouter_api_key
+      - finerag_milvus_endpoint
+      - finerag_milvus_username
+      - finerag_milvus_password
+      - finerag_milvus_token
+
+  fine-rag-ingestion-ui:
+    build:
+      context: ../fine-rag-ingestion-ui
+      dockerfile: Dockerfile
+    container_name: finerag-ingestion-dashboard-ui
+    restart: unless-stopped
+    ports:
+      - "14173:80"
+    depends_on:
+      - finerag-backend
+
+  fine-rag-query-ui:
+    build:
+      context: ../fine-rag-query-ui
+      dockerfile: Dockerfile
+    container_name: finerag-search-query-ui
+    restart: unless-stopped
+    ports:
+      - "14174:80"
+    depends_on:
+      - finerag-backend
+secrets:
+  finerag_jwt_secret:
+    file: ./secrets/finerag_jwt_secret.txt
+  finerag_database_url:
+    file: ./secrets/finerag_database_url.txt
+  finerag_bootstrap_admin_username:
+    file: ./secrets/finerag_bootstrap_admin_username.txt
+  finerag_bootstrap_admin_password:
+    file: ./secrets/finerag_bootstrap_admin_password.txt
+  finerag_bootstrap_admin_api_key:
+    file: ./secrets/finerag_bootstrap_admin_api_key.txt
+  finerag_bootstrap_secondary_username:
+    file: ./secrets/finerag_bootstrap_secondary_username.txt
+  finerag_bootstrap_secondary_password:
+    file: ./secrets/finerag_bootstrap_secondary_password.txt
+  finerag_portkey_api_key:
+    file: ./secrets/finerag_portkey_api_key.txt
+  finerag_cohere_api_key:
+    file: ./secrets/finerag_cohere_api_key.txt
+  finerag_openrouter_api_key:
+    file: ./secrets/finerag_openrouter_api_key.txt
+  finerag_milvus_endpoint:
+    file: ./secrets/finerag_milvus_endpoint.txt
+  finerag_milvus_username:
+    file: ./secrets/finerag_milvus_username.txt
+  finerag_milvus_password:
+    file: ./secrets/finerag_milvus_password.txt
+  finerag_milvus_token:
+    file: ./secrets/finerag_milvus_token.txt
