@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -146,7 +148,7 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleKnowledgeBases(w http.ResponseWriter, r *http.Request) {
 	tenantID := strings.TrimSpace(r.Header.Get("X-Tenant-ID"))
-	rows, err := s.db.QueryContext(r.Context(), `SELECT source_uri, MAX(status), COUNT(*)::int, COALESCE(SUM(chunk_count),0)::int, MAX(submitted_at)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT source_uri, COALESCE(MAX(status), 'queued'), COUNT(*)::bigint, COALESCE(SUM(chunk_count),0)::bigint, MAX(submitted_at)
 FROM ingestion_jobs
 WHERE tenant_id = $1
 GROUP BY source_uri
@@ -159,13 +161,17 @@ ORDER BY MAX(submitted_at) DESC`, tenantID)
 	out := make([]map[string]any, 0)
 	for rows.Next() {
 		var sourceURI, status string
-		var documentCount, chunkCount int
+		var documentCount, chunkCount int64
 		var last time.Time
 		if err := rows.Scan(&sourceURI, &status, &documentCount, &chunkCount, &last); err != nil {
 			writeError(w, http.StatusInternalServerError, "knowledge_bases_scan_failed", err.Error())
 			return
 		}
 		out = append(out, map[string]any{"knowledgeBaseId": hashHex(sourceURI), "name": sourceURI, "status": mapJobStatus(status), "documentCount": documentCount, "chunkCount": chunkCount, "lastIngestedAt": last.UTC().Format(time.RFC3339)})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "knowledge_bases_iter_failed", err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -177,10 +183,20 @@ func (s *Server) handleVectorStats(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "tenant_mismatch", "path tenant must match header")
 		return
 	}
-	var vectorCount, storageBytes int64
-	err := s.db.QueryRowContext(r.Context(), `SELECT COALESCE(SUM(chunk_count),0)::bigint, COALESCE(SUM(payload_bytes),0)::bigint FROM ingestion_jobs WHERE tenant_id = $1`, tenantPath).Scan(&vectorCount, &storageBytes)
+	var vectorCountText, storageBytesText string
+	err := s.db.QueryRowContext(r.Context(), `SELECT COALESCE(SUM(chunk_count),0)::text, COALESCE(SUM(payload_bytes),0)::text FROM ingestion_jobs WHERE tenant_id = $1`, tenantPath).Scan(&vectorCountText, &storageBytesText)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "vector_stats_failed", err.Error())
+		return
+	}
+	vectorCount, err := parseInt64Field(vectorCountText)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "vector_stats_parse_failed", err.Error())
+		return
+	}
+	storageBytes, err := parseInt64Field(storageBytesText)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "vector_stats_parse_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"vectorCount": vectorCount, "storageBytes": storageBytes, "updatedAt": time.Now().UTC().Format(time.RFC3339)})
@@ -316,7 +332,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	tenantID := strings.TrimSpace(r.Header.Get("X-Tenant-ID"))
-	rows, err := s.db.QueryContext(r.Context(), `SELECT job_id, source_uri, status, stage, processed_files, total_files, successful_files, failed_files, policy_code, policy_reason, submitted_at
+	rows, err := s.db.QueryContext(r.Context(), `SELECT job_id, source_uri, status, COALESCE(stage,''), processed_files, total_files, successful_files, failed_files, COALESCE(policy_code,''), COALESCE(policy_reason,''), submitted_at
 FROM ingestion_jobs WHERE tenant_id = $1 ORDER BY submitted_at DESC LIMIT 100`, tenantID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "job_list_failed", err.Error())
@@ -325,14 +341,19 @@ FROM ingestion_jobs WHERE tenant_id = $1 ORDER BY submitted_at DESC LIMIT 100`, 
 	defer rows.Close()
 	out := make([]map[string]any, 0)
 	for rows.Next() {
-		var jobID, sourceURI, status, stage, policyCode, policyReason string
+		var jobID, sourceURI, status string
+		var stage, policyCode, policyReason sql.NullString
 		var processed, total, successful, failed int
 		var submitted time.Time
 		if err := rows.Scan(&jobID, &sourceURI, &status, &stage, &processed, &total, &successful, &failed, &policyCode, &policyReason, &submitted); err != nil {
 			writeError(w, http.StatusInternalServerError, "job_scan_failed", err.Error())
 			return
 		}
-		out = append(out, map[string]any{"jobId": jobID, "sourceUri": sourceURI, "status": status, "stage": stage, "processedFiles": processed, "totalFiles": total, "successfulFiles": successful, "failedFiles": failed, "policyCode": policyCode, "policyReason": policyReason, "submittedAt": submitted.UTC().Format(time.RFC3339)})
+		out = append(out, map[string]any{"jobId": jobID, "sourceUri": sourceURI, "status": status, "stage": stage.String, "processedFiles": processed, "totalFiles": total, "successfulFiles": successful, "failedFiles": failed, "policyCode": policyCode.String, "policyReason": policyReason.String, "submittedAt": submitted.UTC().Format(time.RFC3339)})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "job_iter_failed", err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -359,20 +380,33 @@ func (s *Server) handleJobStream(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", string(b))
 		flusher.Flush()
 	}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT job_id, source_uri, status, stage, processed_files, total_files, successful_files, failed_files, policy_code, policy_reason, submitted_at
+	rows, err := s.db.QueryContext(r.Context(), `SELECT job_id, source_uri, status, COALESCE(stage,''), processed_files, total_files, successful_files, failed_files, COALESCE(policy_code,''), COALESCE(policy_reason,''), submitted_at
 FROM ingestion_jobs WHERE tenant_id = $1 ORDER BY submitted_at DESC LIMIT 25`, tenantID)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var jobID, sourceURI, status, stage, policyCode, policyReason string
+			var jobID, sourceURI, status string
+			var stage, policyCode, policyReason sql.NullString
 			var processed, total, successful, failed int
 			var submitted time.Time
 			if rows.Scan(&jobID, &sourceURI, &status, &stage, &processed, &total, &successful, &failed, &policyCode, &policyReason, &submitted) == nil {
-				emit(map[string]any{"type": "job", "job": map[string]any{"jobId": jobID, "sourceUri": sourceURI, "status": status, "stage": stage, "processedFiles": processed, "totalFiles": total, "successfulFiles": successful, "failedFiles": failed, "policyCode": policyCode, "policyReason": policyReason, "submittedAt": submitted.UTC().Format(time.RFC3339)}})
+				emit(map[string]any{"type": "job", "job": map[string]any{"jobId": jobID, "sourceUri": sourceURI, "status": status, "stage": stage.String, "processedFiles": processed, "totalFiles": total, "successfulFiles": successful, "failedFiles": failed, "policyCode": policyCode.String, "policyReason": policyReason.String, "submittedAt": submitted.UTC().Format(time.RFC3339)}})
 			}
 		}
 	}
 	emit(map[string]any{"type": "done"})
+}
+
+func parseInt64Field(raw string) (int64, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid integer value %q: %w", value, err)
+	}
+	return parsed, nil
 }
 
 func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
