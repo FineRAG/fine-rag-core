@@ -284,6 +284,7 @@ func (w *DeterministicAsyncWorker) ProcessMessage(ctx context.Context, message c
 			},
 			IndexedAt:  now,
 			SourceURI:  message.Job.SourceURI,
+			ObjectKey:  message.Job.SourceURI, // Defaulting ObjectKey to SourceURI for first-class filtering
 			Checksum:   message.Job.Checksum,
 			RetryCount: message.Attempt,
 		}
