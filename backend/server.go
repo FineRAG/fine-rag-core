@@ -522,11 +522,7 @@ func (s *Server) EnsureBootstrapData(ctx context.Context) error {
 	}
 	tenantID := envOr("FINE_RAG_BOOTSTRAP_TENANT_ID", "tenant-a")
 	tenantName := envOr("FINE_RAG_BOOTSTRAP_TENANT_NAME", "Tenant A")
-	var userID int64
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM app_users WHERE username = $1`, user).Scan(&userID)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = s.db.QueryRowContext(ctx, `INSERT INTO app_users (username, password_hash, api_key_hash, active) VALUES ($1,$2,$3,TRUE) RETURNING id`, user, HashSecret(pass), HashSecret(apiKey)).Scan(&userID)
-	}
+	_, err := s.ensureBootstrapUserAssigned(ctx, user, pass, apiKey, tenantID)
 	if err != nil {
 		return err
 	}
@@ -538,8 +534,38 @@ func (s *Server) EnsureBootstrapData(ctx context.Context) error {
 	if err := repo.Upsert(tctx, contracts.TenantRecord{TenantID: contracts.TenantID(tenantID), DisplayName: tenantName, PlanTier: "starter", Active: true, UpdatedAt: time.Now().UTC()}); err != nil {
 		return err
 	}
+	secondaryUser := envOrSecret("FINE_RAG_BOOTSTRAP_SECONDARY_USERNAME", "")
+	secondaryPass := envOrSecret("FINE_RAG_BOOTSTRAP_SECONDARY_PASSWORD", "")
+	secondaryAPIKey := envOrSecret("FINE_RAG_BOOTSTRAP_SECONDARY_API_KEY", "")
+	if secondaryUser != "" || secondaryPass != "" || secondaryAPIKey != "" {
+		if secondaryUser == "" || secondaryPass == "" {
+			return errors.New("secondary bootstrap user requires username and password when enabled")
+		}
+		if _, err := s.ensureBootstrapUserAssigned(ctx, secondaryUser, secondaryPass, secondaryAPIKey, tenantID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) ensureBootstrapUserAssigned(ctx context.Context, username string, password string, apiKey string, tenantID string) (int64, error) {
+	var userID int64
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM app_users WHERE username = $1`, username).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if strings.TrimSpace(apiKey) == "" {
+			err = s.db.QueryRowContext(ctx, `INSERT INTO app_users (username, password_hash, active) VALUES ($1,$2,TRUE) RETURNING id`, username, HashSecret(password)).Scan(&userID)
+		} else {
+			err = s.db.QueryRowContext(ctx, `INSERT INTO app_users (username, password_hash, api_key_hash, active) VALUES ($1,$2,$3,TRUE) RETURNING id`, username, HashSecret(password), HashSecret(apiKey)).Scan(&userID)
+		}
+	}
+	if err != nil {
+		return 0, err
+	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO user_tenants (user_id, tenant_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, userID, tenantID)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return userID, nil
 }
 
 func HashSecret(raw string) string {
