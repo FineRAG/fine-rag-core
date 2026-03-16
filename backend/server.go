@@ -429,6 +429,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), userIDKey, claims.UID)
+		ctx = contracts.WithActorID(ctx, claims.Sub)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -458,7 +459,13 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 			writeError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
 			return
 		}
-		next.ServeHTTP(w, r)
+		requestID := requestIDFromContext(r.Context())
+		tenantCtx, err := contracts.WithTenantContext(r.Context(), contracts.TenantContext{TenantID: contracts.TenantID(tenantID), RequestID: requestID})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "tenant_context_failed", err.Error())
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(tenantCtx))
 	})
 }
 
@@ -550,14 +557,17 @@ func (s *Server) EnsureBootstrapData(ctx context.Context) error {
 
 func (s *Server) ensureBootstrapUserAssigned(ctx context.Context, username string, password string, apiKey string, tenantID string) (int64, error) {
 	var userID int64
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM app_users WHERE username = $1`, username).Scan(&userID)
-	if errors.Is(err, sql.ErrNoRows) {
-		if strings.TrimSpace(apiKey) == "" {
-			err = s.db.QueryRowContext(ctx, `INSERT INTO app_users (username, password_hash, active) VALUES ($1,$2,TRUE) RETURNING id`, username, HashSecret(password)).Scan(&userID)
-		} else {
-			err = s.db.QueryRowContext(ctx, `INSERT INTO app_users (username, password_hash, api_key_hash, active) VALUES ($1,$2,$3,TRUE) RETURNING id`, username, HashSecret(password), HashSecret(apiKey)).Scan(&userID)
-		}
+	var apiKeyHash any
+	if strings.TrimSpace(apiKey) != "" {
+		apiKeyHash = HashSecret(apiKey)
 	}
+	err := s.db.QueryRowContext(ctx, `INSERT INTO app_users (username, password_hash, api_key_hash, active)
+VALUES ($1,$2,$3,TRUE)
+ON CONFLICT (username) DO UPDATE
+SET password_hash = EXCLUDED.password_hash,
+    api_key_hash = COALESCE(EXCLUDED.api_key_hash, app_users.api_key_hash),
+    active = TRUE
+RETURNING id`, username, HashSecret(password), apiKeyHash).Scan(&userID)
 	if err != nil {
 		return 0, err
 	}
