@@ -43,6 +43,8 @@ services:
       FINE_RAG_BOOTSTRAP_ADMIN_USERNAME_FILE: /run/secrets/finerag_bootstrap_admin_username
       FINE_RAG_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/finerag_bootstrap_admin_password
       FINE_RAG_BOOTSTRAP_ADMIN_API_KEY_FILE: /run/secrets/finerag_bootstrap_admin_api_key
+      FINE_RAG_BOOTSTRAP_SECONDARY_USERNAME_FILE: /run/secrets/finerag_bootstrap_secondary_username
+      FINE_RAG_BOOTSTRAP_SECONDARY_PASSWORD_FILE: /run/secrets/finerag_bootstrap_secondary_password
       FINE_RAG_BOOTSTRAP_TENANT_ID: "tenant-a"
       FINE_RAG_BOOTSTRAP_TENANT_NAME: "Tenant A"
     ports:
@@ -53,6 +55,8 @@ services:
       - finerag_bootstrap_admin_username
       - finerag_bootstrap_admin_password
       - finerag_bootstrap_admin_api_key
+      - finerag_bootstrap_secondary_username
+      - finerag_bootstrap_secondary_password
       - finerag_portkey_api_key
       - finerag_openrouter_api_key
       - finerag_milvus_endpoint
@@ -92,6 +96,10 @@ secrets:
     file: ./secrets/finerag_bootstrap_admin_password.txt
   finerag_bootstrap_admin_api_key:
     file: ./secrets/finerag_bootstrap_admin_api_key.txt
+  finerag_bootstrap_secondary_username:
+    file: ./secrets/finerag_bootstrap_secondary_username.txt
+  finerag_bootstrap_secondary_password:
+    file: ./secrets/finerag_bootstrap_secondary_password.txt
   finerag_portkey_api_key:
     file: ./secrets/finerag_portkey_api_key.txt
   finerag_openrouter_api_key:
