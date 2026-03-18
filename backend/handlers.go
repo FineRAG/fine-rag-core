@@ -154,6 +154,7 @@ WHERE tenant_id = $1
 GROUP BY source_uri
 ORDER BY MAX(submitted_at) DESC`, tenantID)
 	if err != nil {
+		logging.Logger.Error("knowledge_bases_failed", zap.Error(err), zap.String("tenantID", tenantID))
 		writeError(w, http.StatusInternalServerError, "knowledge_bases_failed", err.Error())
 		return
 	}
@@ -162,14 +163,26 @@ ORDER BY MAX(submitted_at) DESC`, tenantID)
 	for rows.Next() {
 		var sourceURI, status string
 		var documentCount, chunkCount int64
-		var last time.Time
+		var last sql.NullTime
 		if err := rows.Scan(&sourceURI, &status, &documentCount, &chunkCount, &last); err != nil {
+			logging.Logger.Error("knowledge_bases_scan_failed", zap.Error(err), zap.String("tenantID", tenantID))
 			writeError(w, http.StatusInternalServerError, "knowledge_bases_scan_failed", err.Error())
 			return
 		}
-		out = append(out, map[string]any{"knowledgeBaseId": hashHex(sourceURI), "name": sourceURI, "status": mapJobStatus(status), "documentCount": documentCount, "chunkCount": chunkCount, "lastIngestedAt": last.UTC().Format(time.RFC3339)})
+		item := map[string]any{
+			"knowledgeBaseId": hashHex(sourceURI),
+			"name":            sourceURI,
+			"status":          mapJobStatus(status),
+			"documentCount":   documentCount,
+			"chunkCount":      chunkCount,
+		}
+		if last.Valid {
+			item["lastIngestedAt"] = last.Time.UTC().Format(time.RFC3339)
+		}
+		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
+		logging.Logger.Error("knowledge_bases_iter_failed", zap.Error(err), zap.String("tenantID", tenantID))
 		writeError(w, http.StatusInternalServerError, "knowledge_bases_iter_failed", err.Error())
 		return
 	}
@@ -186,16 +199,19 @@ func (s *Server) handleVectorStats(w http.ResponseWriter, r *http.Request) {
 	var vectorCountText, storageBytesText string
 	err := s.db.QueryRowContext(r.Context(), `SELECT COALESCE(SUM(chunk_count),0)::text, COALESCE(SUM(payload_bytes),0)::text FROM ingestion_jobs WHERE tenant_id = $1`, tenantPath).Scan(&vectorCountText, &storageBytesText)
 	if err != nil {
+		logging.Logger.Error("vector_stats_failed", zap.Error(err), zap.String("tenantID", tenantPath))
 		writeError(w, http.StatusInternalServerError, "vector_stats_failed", err.Error())
 		return
 	}
 	vectorCount, err := parseInt64Field(vectorCountText)
 	if err != nil {
+		logging.Logger.Error("vector_stats_parse_failed", zap.Error(err), zap.String("tenantID", tenantPath), zap.String("raw", vectorCountText))
 		writeError(w, http.StatusInternalServerError, "vector_stats_parse_failed", err.Error())
 		return
 	}
 	storageBytes, err := parseInt64Field(storageBytesText)
 	if err != nil {
+		logging.Logger.Error("vector_stats_parse_failed", zap.Error(err), zap.String("tenantID", tenantPath), zap.String("raw", storageBytesText))
 		writeError(w, http.StatusInternalServerError, "vector_stats_parse_failed", err.Error())
 		return
 	}
@@ -335,6 +351,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `SELECT job_id, source_uri, status, COALESCE(stage,''), processed_files, total_files, successful_files, failed_files, COALESCE(policy_code,''), COALESCE(policy_reason,''), submitted_at
 FROM ingestion_jobs WHERE tenant_id = $1 ORDER BY submitted_at DESC LIMIT 100`, tenantID)
 	if err != nil {
+		logging.Logger.Error("job_list_failed", zap.Error(err), zap.String("tenantID", tenantID))
 		writeError(w, http.StatusInternalServerError, "job_list_failed", err.Error())
 		return
 	}
@@ -554,9 +571,11 @@ func (s *Server) handleSearchStream(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 	emit(map[string]any{"type": "top_vectors", "topVectors": topVectors})
+	
 	for _, tok := range strings.Fields(answer) {
 		emit(map[string]any{"type": "token", "token": tok + " "})
 	}
+
 	citations := make([]map[string]string, 0)
 	for _, d := range rankedDocs {
 		c := map[string]string{"id": d.DocumentID, "title": "Source", "uri": d.SourceURI}
