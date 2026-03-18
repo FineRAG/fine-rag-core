@@ -3,7 +3,6 @@ package retrieval
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path"
 	"sort"
 	"strings"
@@ -58,7 +57,7 @@ func NewDeterministicRetrievalService(searcher contracts.VectorSearcher, reranke
 	}
 	rerankTimeout := cfg.RerankTimeout
 	if rerankTimeout <= 0 {
-		rerankTimeout = 200 * time.Millisecond
+		rerankTimeout = 15 * time.Second
 	}
 	failureThreshold := cfg.FailureThreshold
 	if failureThreshold <= 0 {
@@ -96,10 +95,13 @@ func (s *DeterministicRetrievalService) Search(ctx context.Context, metadata con
 		return contracts.RetrievalResult{}, errors.New("vector searcher is required")
 	}
 
-	docs, effectiveQuery, err := s.searchDocuments(ctx, query)
+	docs, effectiveQueries, filters, err := s.searchDocuments(ctx, query)
 	if err != nil {
 		return contracts.RetrievalResult{}, err
 	}
+	logging.Logger.Info("search.step.vector_search.done", 
+		zap.String("requestID", query.RequestID), 
+		zap.Int("documentCount", len(docs)))
 
 	filtered := make([]contracts.RetrievalDocument, 0, len(docs))
 	for _, doc := range docs {
@@ -107,7 +109,16 @@ func (s *DeterministicRetrievalService) Search(ctx context.Context, metadata con
 			filtered = append(filtered, doc)
 		}
 	}
-	filtered = applyMetadataIntentRanking(effectiveQuery, filtered)
+	
+	// Apply filters if needed (future implementation)
+	_ = filters 
+
+	// Use original query or first expanded query for heuristic ranking
+	rankingQuery := query.Text
+	if len(effectiveQueries) > 0 {
+		rankingQuery = effectiveQueries[0]
+	}
+	filtered = applyMetadataIntentRanking(rankingQuery, filtered)
 
 	rerankApplied := false
 	fallbackReason := ""
@@ -159,9 +170,11 @@ func (s *DeterministicRetrievalService) Search(ctx context.Context, metadata con
 	return result, nil
 }
 
-func (s *DeterministicRetrievalService) searchDocuments(ctx context.Context, query contracts.RetrievalQuery) ([]contracts.RetrievalDocument, string, error) {
-	effectiveQuery := strings.TrimSpace(query.Text)
-	rewriteApplied := false
+func (s *DeterministicRetrievalService) searchDocuments(ctx context.Context, query contracts.RetrievalQuery) ([]contracts.RetrievalDocument, []string, contracts.MetadataFilters, error) {
+	expanded := contracts.StructuredQuery{
+		ExpandedQueries: []string{query.Text},
+	}
+	logging.Logger.Info("retrieval.search_documents.start", zap.String("query", query.Text), zap.Bool("hasRewriter", s.queryRewriter != nil))
 	if s.queryRewriter != nil {
 		rewritten, err := s.queryRewriter.RewriteQuery(ctx, query.TenantID, query.Text)
 		if err != nil {
@@ -171,52 +184,52 @@ func (s *DeterministicRetrievalService) searchDocuments(ctx context.Context, que
 				zap.String("requestID", query.RequestID),
 				zap.Error(err),
 			)
-		} else if trimmed := strings.TrimSpace(rewritten); trimmed != "" {
+		} else {
+			expanded = rewritten
 			logging.Logger.Info(
 				"search.step.query_rewrite.done",
 				zap.String("tenantID", string(query.TenantID)),
 				zap.String("requestID", query.RequestID),
 				zap.String("originalQuery", query.Text),
-				zap.String("rewrittenQuery", trimmed),
+				zap.Int("expandedCount", len(expanded.ExpandedQueries)),
 			)
-			effectiveQuery = trimmed
-			rewriteApplied = true
 		}
 	}
-	if expanded := buildHeuristicRetrievalQuery(query.Text, effectiveQuery); expanded != effectiveQuery {
-		logging.Logger.Info(
-			"search.step.query_rewrite.heuristic_applied",
-			zap.String("tenantID", string(query.TenantID)),
-			zap.String("requestID", query.RequestID),
-			zap.Bool("rewriteApplied", rewriteApplied),
-			zap.String("effectiveQuery", expanded),
-		)
-		effectiveQuery = expanded
-	}
-	if embedSearch, ok := s.searcher.(vectorEmbeddingSearcher); ok && s.embedder != nil {
-		vectors, err := s.embedder.Embed(ctx, query.TenantID, []string{effectiveQuery})
+
+	allDocs := make([]contracts.RetrievalDocument, 0)
+	seenDocs := make(map[string]bool)
+
+	for _, qText := range expanded.ExpandedQueries {
+		var docs []contracts.RetrievalDocument
+		var err error
+
+		if embedSearch, ok := s.searcher.(vectorEmbeddingSearcher); ok && s.embedder != nil {
+			vectors, errEmbed := s.embedder.Embed(ctx, query.TenantID, []string{qText})
+			if errEmbed != nil {
+				logging.Logger.Warn("search.step.embedding.failed", zap.Error(errEmbed))
+				continue
+			}
+			if len(vectors) == 1 && len(vectors[0]) > 0 {
+				docs, err = embedSearch.SearchByEmbedding(ctx, query.TenantID, vectors[0], query.TopK)
+			}
+		} else {
+			docs, err = s.searcher.Search(ctx, query.TenantID, qText, query.TopK)
+		}
+
 		if err != nil {
-			return nil, effectiveQuery, fmt.Errorf("query embedding failed: %w", err)
+			logging.Logger.Warn("search.step.vector_search.failed", zap.Error(err))
+			continue
 		}
-		firstDim := 0
-		if len(vectors) > 0 {
-			firstDim = len(vectors[0])
+
+		for _, d := range docs {
+			if !seenDocs[d.DocumentID] {
+				seenDocs[d.DocumentID] = true
+				allDocs = append(allDocs, d)
+			}
 		}
-		logging.Logger.Info(
-			"search.step.embedding.response",
-			zap.String("tenantID", string(query.TenantID)),
-			zap.String("requestID", query.RequestID),
-			zap.Int("vectorCount", len(vectors)),
-			zap.Int("firstVectorDim", firstDim),
-		)
-		if len(vectors) != 1 || len(vectors[0]) == 0 {
-			return nil, effectiveQuery, errors.New("query embedding failed: empty embedding vector")
-		}
-		docs, err := embedSearch.SearchByEmbedding(ctx, query.TenantID, vectors[0], query.TopK)
-		return docs, effectiveQuery, err
 	}
-	docs, err := s.searcher.Search(ctx, query.TenantID, effectiveQuery, query.TopK)
-	return docs, effectiveQuery, err
+
+	return allDocs, expanded.ExpandedQueries, expanded.MetadataFilters, nil
 }
 
 func buildHeuristicRetrievalQuery(originalQuery string, effectiveQuery string) string {
@@ -228,29 +241,7 @@ func buildHeuristicRetrievalQuery(originalQuery string, effectiveQuery string) s
 		return ""
 	}
 
-	lower := strings.ToLower(originalQuery + " " + base)
 	extra := make([]string, 0, 16)
-
-	if strings.Contains(lower, "education") || strings.Contains(lower, "educational") || strings.Contains(lower, "qualification") {
-		extra = append(extra,
-			"academic qualification",
-			"degree",
-			"university",
-			"college",
-			"institute",
-			"bachelor",
-			"master",
-		)
-	}
-	if strings.Contains(lower, "cgpa") || strings.Contains(lower, "gpa") {
-		extra = append(extra,
-			"cgpa",
-			"gpa",
-			"grade point",
-			"score",
-			"academic performance",
-		)
-	}
 
 	identityTerms := tokenizeIdentityTerms(originalQuery)
 	for _, term := range identityTerms {
@@ -325,8 +316,10 @@ func (s *DeterministicRetrievalService) Rerank(ctx context.Context, metadata con
 
 func (s *DeterministicRetrievalService) rerankDocuments(ctx context.Context, query contracts.RetrievalQuery, docs []contracts.RetrievalDocument) ([]contracts.RetrievalDocument, error) {
 	if s.reranker == nil {
+		logging.Logger.Info("search.step.rerank.skipped", zap.String("reason", "no_reranker"))
 		return docs, nil
 	}
+	logging.Logger.Info("search.step.rerank.start", zap.Int("candidateCount", len(docs)))
 	candidates := make([]contracts.RerankCandidate, 0, len(docs))
 	limit := len(docs)
 	if s.rerankTopK < limit {
@@ -348,8 +341,11 @@ func (s *DeterministicRetrievalService) rerankDocuments(ctx context.Context, que
 		TopN:       len(candidates),
 	})
 	if err != nil {
+		logging.Logger.Warn("search.step.rerank.failed", zap.Error(err))
 		return docs, err
 	}
+
+	logging.Logger.Info("search.step.rerank.done", zap.Int("resultCount", len(ranked)))
 
 	scoreByDocument := map[string]float64{}
 	for idx, candidate := range ranked {
