@@ -544,12 +544,15 @@ func normalizeMilvusAddress(endpoint string) (string, error) {
 		if strings.Contains(host, ":") {
 			return host, nil
 		}
-		return host + ":19530", nil
+		if strings.HasPrefix(raw, "https://") {
+			return host + ":443", nil
+		}
+		return host + ":80", nil
 	}
 	if strings.Contains(raw, ":") {
 		return raw, nil
 	}
-	return raw + ":443", nil
+	return raw + ":19530", nil
 }
 
 func (a *Adapter) markTrace(status string, start time.Time) {
