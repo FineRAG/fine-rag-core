@@ -1,6 +1,9 @@
 package runtime
 
 import (
+	"strings"
+
+	"enterprise-go-rag/internal/adapters/gateway/cohere"
 	"enterprise-go-rag/internal/adapters/gateway/portkey"
 	"enterprise-go-rag/internal/adapters/vector/milvus"
 	"enterprise-go-rag/internal/adapters/vector/stub"
@@ -36,7 +39,12 @@ func BuildGatewayReranker(cfg GatewayConfig, nowFn func() int64) (contracts.Rera
 	if err := cfg.Validate(); err != nil {
 		return nil, "", err
 	}
-	switch cfg.Provider {
+	provider := strings.ToLower(strings.TrimSpace(cfg.RerankerProvider))
+	if provider == "" {
+		provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
+	}
+
+	switch provider {
 	case "portkey":
 		adapter, err := portkey.NewRerankerAdapter(portkey.Config{
 			BaseURL:                 cfg.PortkeyBaseURL,
@@ -46,12 +54,26 @@ func BuildGatewayReranker(cfg GatewayConfig, nowFn func() int64) (contracts.Rera
 			CircuitFailureThreshold: cfg.CircuitFailureThreshold,
 			FallbackMode:            cfg.FallbackMode,
 			DirectAllowlist:         cfg.DirectAllowlist,
+			Model:                   cfg.RerankModel,
+			ProviderKey:             cfg.PortkeyProviderKey,
 			NowMillis:               nowFn,
 		})
 		if err != nil {
 			return nil, "", err
 		}
 		return adapter, "portkey", nil
+	case "cohere":
+		adapter, err := cohere.NewCohereReranker(cohere.Config{
+			APIKey:                  cfg.PortkeyProviderKey, // Reusing the same key variable
+			Model:                   cfg.RerankModel,
+			Timeout:                 cfg.Timeout,
+			RetryMax:                cfg.RetryMax,
+			CircuitFailureThreshold: cfg.CircuitFailureThreshold,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		return adapter, "cohere", nil
 	default:
 		return portkey.NewStubReranker(), "stub", nil
 	}

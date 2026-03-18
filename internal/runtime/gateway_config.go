@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,9 @@ type GatewayConfig struct {
 	CircuitFailureThreshold int
 	FallbackMode            string
 	DirectAllowlist         []string
+	RerankModel             string
+	PortkeyProviderKey      string
+	RerankerProvider        string
 }
 
 func LoadGatewayConfigFromEnv(lookupEnv func(string) (string, bool)) GatewayConfig {
@@ -24,7 +28,7 @@ func LoadGatewayConfigFromEnv(lookupEnv func(string) (string, bool)) GatewayConf
 	if v, ok := lookupEnv("FINE_RAG_GATEWAY_PROVIDER"); ok && strings.TrimSpace(v) != "" {
 		provider = strings.ToLower(strings.TrimSpace(v))
 	}
-	timeout := 250 * time.Millisecond
+	timeout := 20 * time.Second
 	if v := strings.TrimSpace(getEnv(lookupEnv, "FINE_RAG_GATEWAY_TIMEOUT")); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			timeout = d
@@ -67,6 +71,9 @@ func LoadGatewayConfigFromEnv(lookupEnv func(string) (string, bool)) GatewayConf
 		CircuitFailureThreshold: threshold,
 		FallbackMode:            fallback,
 		DirectAllowlist:         allowlist,
+		RerankModel:             getEnv(lookupEnv, "FINE_RAG_RERANK_MODEL"),
+		PortkeyProviderKey:      getEnv(lookupEnv, "FINE_RAG_COHERE_API_KEY"),
+		RerankerProvider:        getEnv(lookupEnv, "FINE_RAG_RERANKER_PROVIDER"),
 	}
 }
 
@@ -110,4 +117,21 @@ func validateFallbackMode(mode string) error {
 	default:
 		return fmt.Errorf("unsupported FINE_RAG_GATEWAY_FALLBACK_MODE %q", mode)
 	}
+}
+
+func getEnv(lookupEnv func(string) (string, bool), key string) string {
+	if lookupEnv == nil {
+		return ""
+	}
+	if filePath, ok := lookupEnv(key + "_FILE"); ok {
+		if trimmed := strings.TrimSpace(filePath); trimmed != "" {
+			if raw, err := os.ReadFile(trimmed); err == nil {
+				if value := strings.TrimSpace(string(raw)); value != "" {
+					return value
+				}
+			}
+		}
+	}
+	v, _ := lookupEnv(key)
+	return v
 }
