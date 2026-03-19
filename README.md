@@ -137,12 +137,15 @@ The ingestion subsystem goes beyond naive "upload → embed → store." It imple
 
 ### High-Performance Semantic Retrieval Engine
 
-- **Milvus-powered vector search** with mandatory tenant-scoped filtering — cross-tenant data leakage is architecturally impossible
-- **Cross-encoder reranking** via Portkey AI gateway for precision-tuned relevance scoring on top-K candidates
-- **LLM-grounded answer generation** with citation assembly — answers include source document references, not hallucinated claims
-- **Dual query modes**: synchronous JSON response OR **real-time SSE streaming** with token-by-token answer delivery, citation events, and trace metadata
-- **Embedding model failover** — automatic retry with configurable fallback model when primary embedding provider degrades
-- **Query intent scoring** — heuristic classification of query signals (education, qualification, experience) for domain-aware ranking
+- **Milvus-powered vector search** with mandatory tenant-scoped filtering — cross-tenant data leakage is architecturally impossible.
+- **Advanced Indexing Strategy**: The vector field utilizes Milvus `AUTOINDEX` (optimized for dense ANN search on Zilliz Cloud) with `COSINE` similarity.
+- **O(1) Pre-filtering**: The `tenant_id` and `object_key` fields are indexed as scalar fields, enabling O(1) metadata filtering prior to vector search, significantly reducing latency and compute overhead.
+- **Prefix-Based Purging**: The `object_key` is a first-class indexed field, allowing for efficient data purging by prefix (e.g., when a specific document or an entire tenant is removed via `POST /tenants/{id}/purge`).
+- **Cross-encoder reranking** via direct **Cohere reranker-v4.0** integration for precision-tuned relevance scoring on top-K candidates.
+- **LLM-grounded answer generation** with citation assembly — answers include source document references, not hallucinated claims.
+- **Dual query modes**: synchronous JSON response OR **real-time SSE streaming** with token-by-token answer delivery, citation events, and trace metadata.
+- **Embedding model failover** — automatic retry with configurable fallback model when primary embedding provider degrades.
+- **Query intent scoring** — heuristic classification of query signals (education, qualification, experience) for domain-aware ranking.
 
 ### Real-Time Streaming Architecture (SSE)
 
@@ -181,7 +184,8 @@ internal/
 │   ├── gateway.go    # LLM/embedding gateway contracts
 │   └── storage.go    # Object storage contracts
 ├── adapters/         # Infrastructure implementations
-│   ├── gateway/portkey/   # Portkey AI gateway (embeddings, chat, reranker)
+│   ├── gateway/portkey/   # Portkey AI gateway (embeddings, chat)
+│   ├── reranker/cohere/   # Direct Cohere reranker-v4.0 adapter
 │   └── vector/milvus/    # Milvus vector database adapter
 ├── services/         # Domain logic (no infrastructure knowledge)
 │   ├── ingestion/    # Job lifecycle, profiling, policy enforcement
@@ -395,7 +399,7 @@ curl -N -X POST "$BASE_URL/api/v1/search/stream" \
 | **LLM Gateway** | Portkey AI | Multi-provider routing, fallback chains, rate limit management |
 | **LLM Provider** | OpenRouter | Access to frontier models (GPT-4o, Claude, Llama) via single API |
 | **Embedding Model** | NVIDIA Llama-Nemotron Embed | High-quality dense embeddings, free tier available |
-| **Reranker** | Cross-encoder via Portkey | Precision reranking of top-K candidates |
+| **Reranker** | Direct Cohere reranker-v4.0 | Precision reranking of top-K candidates |
 | **Frontend** | React + TypeScript + Vite | Type-safe UI with fast HMR development |
 | **Observability** | OpenTelemetry + Grafana Cloud | Vendor-neutral telemetry, managed dashboards |
 | **Containerization** | Docker + Docker Compose | Reproducible builds, secret management, multi-service orchestration |

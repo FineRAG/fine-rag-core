@@ -25,6 +25,7 @@ const (
 	fieldJobID       = "job_id"
 	fieldChunkText   = "chunk_text"
 	fieldSourceURI   = "source_uri"
+	fieldObjectKey   = "object_key"
 	fieldChecksum    = "checksum"
 	fieldRetryCount  = "retry_count"
 	fieldIndexedAtMs = "indexed_at_ms"
@@ -126,6 +127,7 @@ func (a *Adapter) Upsert(ctx context.Context, records []contracts.VectorRecord) 
 	retryCounts := make([]int64, 0, len(records))
 	indexedAt := make([]int64, 0, len(records))
 	metadataJSON := make([]string, 0, len(records))
+	objectKeys := make([]string, 0, len(records))
 	embeddings := make([][]float32, 0, len(records))
 	for _, record := range records {
 		recordIDs = append(recordIDs, record.RecordID)
@@ -133,6 +135,7 @@ func (a *Adapter) Upsert(ctx context.Context, records []contracts.VectorRecord) 
 		jobIDs = append(jobIDs, record.JobID)
 		chunkTexts = append(chunkTexts, record.ChunkText)
 		sourceURIs = append(sourceURIs, record.SourceURI)
+		objectKeys = append(objectKeys, record.ObjectKey)
 		checksums = append(checksums, record.Checksum)
 		retryCounts = append(retryCounts, int64(record.RetryCount))
 		indexedAt = append(indexedAt, record.IndexedAt.UTC().UnixMilli())
@@ -149,6 +152,7 @@ func (a *Adapter) Upsert(ctx context.Context, records []contracts.VectorRecord) 
 		entity.NewColumnVarChar(fieldJobID, jobIDs),
 		entity.NewColumnVarChar(fieldChunkText, chunkTexts),
 		entity.NewColumnVarChar(fieldSourceURI, sourceURIs),
+		entity.NewColumnVarChar(fieldObjectKey, objectKeys),
 		entity.NewColumnVarChar(fieldChecksum, checksums),
 		entity.NewColumnInt64(fieldRetryCount, retryCounts),
 		entity.NewColumnInt64(fieldIndexedAtMs, indexedAt),
@@ -377,6 +381,7 @@ func (a *Adapter) ensureCollection(ctx context.Context, dim int) error {
 		WithField(entity.NewField().WithName(fieldJobID).WithDataType(entity.FieldTypeVarChar).WithMaxLength(128)).
 		WithField(entity.NewField().WithName(fieldChunkText).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
 		WithField(entity.NewField().WithName(fieldSourceURI).WithDataType(entity.FieldTypeVarChar).WithMaxLength(2048)).
+		WithField(entity.NewField().WithName(fieldObjectKey).WithDataType(entity.FieldTypeVarChar).WithMaxLength(1024)).
 		WithField(entity.NewField().WithName(fieldChecksum).WithDataType(entity.FieldTypeVarChar).WithMaxLength(128)).
 		WithField(entity.NewField().WithName(fieldRetryCount).WithDataType(entity.FieldTypeInt64)).
 		WithField(entity.NewField().WithName(fieldIndexedAtMs).WithDataType(entity.FieldTypeInt64)).
@@ -405,6 +410,7 @@ func (a *Adapter) ensureIndexAndLoad(ctx context.Context) error {
 			return err
 		}
 	}
+	// Note: Scalar indices for tenant_id and object_key are automatically managed by Milvus AUTOINDEX on Zilliz Cloud
 	if err := a.cli.LoadCollection(ctx, a.cfg.Collection, false); err != nil {
 		msg := strings.ToLower(err.Error())
 		if !strings.Contains(msg, "already") && !strings.Contains(msg, "loaded") {

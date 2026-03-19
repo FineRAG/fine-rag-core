@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func hs(v string) string {
@@ -26,7 +26,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		panic(err)
 	}

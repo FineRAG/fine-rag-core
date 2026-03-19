@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"enterprise-go-rag/backend"
+	"enterprise-go-rag/backend/util"
 	"enterprise-go-rag/internal/logging"
 	"enterprise-go-rag/internal/telemetry"
 
-	_ "github.com/lib/pq"
 	"go.uber.org/zap"
 )
 
@@ -37,9 +37,9 @@ func main() {
 		}
 	}()
 
-	cfg := backend.ConfigFromEnv()
+	cfg := util.ConfigFromEnv()
 
-	db, auditRepo, vectorIndex, retrievalSvc, err := backend.BuildRuntimeDependencies()
+	db, auditRepo, vectorIndex, retrievalSvc, err := util.BuildRuntimeDependencies()
 	if err != nil {
 		logging.Logger.Fatal("failed to initialize runtime dependencies", zap.Error(err))
 	}
@@ -49,7 +49,7 @@ func main() {
 		logging.Logger.Fatal("failed to apply migrations", zap.Error(err))
 	}
 
-	srv, err := backend.NewServer(cfg, db, auditRepo, retrievalSvc, vectorIndex)
+	srv, err := util.NewServer(cfg, db, auditRepo, retrievalSvc, vectorIndex)
 	if err != nil {
 		logging.Logger.Fatal("failed to create server", zap.Error(err))
 	}
@@ -59,7 +59,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           telemetry.WrapHandler("http.server", srv.Handler()),
+		Handler:           telemetry.WrapHandler("http.server", backend.MainAPIHandler(srv)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

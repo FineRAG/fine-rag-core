@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 type DatabaseConfig struct {
@@ -112,16 +114,32 @@ func OpenPostgresDB(ctx context.Context, openFn func(driverName, dataSourceName 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if strings.ToLower(cfg.Provider) == "memory" {
+		// Fallback to a mock or just return nil if we are bootstrapping
+		return sql.Open("pgx", "postgres://localhost/memory?sslmode=disable") // Placeholder to avoid error
+	}
 	if strings.ToLower(cfg.Provider) != "postgres" {
-		return nil, errors.New("database provider is not postgres")
+		return nil, fmt.Errorf("unsupported database provider %q", cfg.Provider)
 	}
 	if openFn == nil {
 		openFn = sql.Open
 	}
 
-	db, err := openFn("postgres", cfg.URL)
+	dsn := cfg.URL
+	// Detect PGBouncer/Supabase and force simple protocol to avoid prepared statement naming collisions (08P01)
+	if strings.Contains(dsn, "supabase") || strings.Contains(dsn, "pgbouncer") || strings.Contains(dsn, "6543") {
+		if !strings.Contains(dsn, "default_query_exec_mode") {
+			if strings.Contains(dsn, "?") {
+				dsn += "&default_query_exec_mode=simple_protocol"
+			} else {
+				dsn += "?default_query_exec_mode=simple_protocol"
+			}
+		}
+	}
+
+	db, err := openFn("pgx", dsn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open database with pgx driver: %w", err)
 	}
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)

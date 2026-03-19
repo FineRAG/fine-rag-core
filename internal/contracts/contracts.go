@@ -280,6 +280,7 @@ type VectorRecord struct {
 	Metadata   map[string]string
 	IndexedAt  time.Time
 	SourceURI  string
+	ObjectKey  string // First-class field for efficient prefix-based purging
 	Checksum   string
 	RetryCount int
 }
