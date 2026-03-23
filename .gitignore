@@ -1,0 +1,44 @@
+# Go
+*.out
+*.test
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+bin/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Dependencies
+vendor/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Secrets
+secrets/
+.secrets/
+
+scripts/*
+
+# Docker
+.dockerignore
+
+# Test coverage
+*.cover
+coverage.txt
+
+# Build outputs
+/build/
