@@ -346,21 +346,25 @@ func (a *Adapter) ensureCollection(ctx context.Context, dim int) error {
 		return err
 	}
 	if exists {
-		if knownDim == 0 {
-			coll, derr := a.cli.DescribeCollection(ctx, a.cfg.Collection)
-			if derr == nil {
-				for _, f := range coll.Schema.Fields {
-					if f.Name == fieldEmbedding {
-						if d, ok := f.TypeParams[entity.TypeParamDim]; ok {
-							if parsed, perr := strconv.Atoi(d); perr == nil && parsed > 0 {
-								a.mu.Lock()
-								a.dim = parsed
-								a.mu.Unlock()
-							}
+		coll, derr := a.cli.DescribeCollection(ctx, a.cfg.Collection)
+		if derr == nil {
+			foundObjectKey := false
+			for _, f := range coll.Schema.Fields {
+				if f.Name == fieldObjectKey {
+					foundObjectKey = true
+				}
+				if f.Name == fieldEmbedding {
+					if d, ok := f.TypeParams[entity.TypeParamDim]; ok {
+						if parsed, perr := strconv.Atoi(d); perr == nil && parsed > 0 {
+							a.mu.Lock()
+							a.dim = parsed
+							a.mu.Unlock()
 						}
-						break
 					}
 				}
+			}
+			if !foundObjectKey {
+				return errors.New("milvus collection schema mismatch: " + fieldObjectKey + " field is missing in " + a.cfg.Collection + ". Please drop the collection to allow the backend to recreate it with the correct schema (required for efficient purging).")
 			}
 		}
 		if err := a.ensureIndexAndLoad(ctx); err != nil {

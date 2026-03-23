@@ -3,7 +3,6 @@ package contracts
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -50,7 +49,7 @@ func WithTenantContext(ctx context.Context, tenantContext TenantContext) (contex
 	}
 
 	if err := tenantContext.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrTenantContextMalformed, err)
+		return nil, errors.New(ErrTenantContextMalformed.Error() + ": " + err.Error())
 	}
 
 	return context.WithValue(ctx, tenantContextKey{}, tenantContext), nil
@@ -72,7 +71,7 @@ func TenantContextFromContext(ctx context.Context) (TenantContext, error) {
 	}
 
 	if err := tenantContext.Validate(); err != nil {
-		return TenantContext{}, fmt.Errorf("%w: %v", ErrTenantContextMalformed, err)
+		return TenantContext{}, errors.New(ErrTenantContextMalformed.Error() + ": " + err.Error())
 	}
 
 	return tenantContext, nil
@@ -81,7 +80,7 @@ func TenantContextFromContext(ctx context.Context) (TenantContext, error) {
 func RequireTenantScope(ctx context.Context) (TenantContext, error) {
 	tenantContext, err := TenantContextFromContext(ctx)
 	if err != nil {
-		return TenantContext{}, fmt.Errorf("%w: %v", ErrTenantScopeRequired, err)
+		return TenantContext{}, errors.New(ErrTenantScopeRequired.Error() + ": " + err.Error())
 	}
 	return tenantContext, nil
 }
@@ -97,7 +96,7 @@ func EnsureTenantMatch(ctx context.Context, tenantID TenantID) error {
 	}
 
 	if tenantContext.TenantID != tenantID {
-		return fmt.Errorf("%w: scope=%s target=%s", ErrTenantScopeMismatch, tenantContext.TenantID, tenantID)
+		return errors.New(ErrTenantScopeMismatch.Error() + ": scope=" + string(tenantContext.TenantID) + " target=" + string(tenantID))
 	}
 
 	return nil
@@ -240,7 +239,7 @@ func (m QueueMessage) Validate() error {
 		return errors.New("message_id is required")
 	}
 	if err := m.Job.Validate(); err != nil {
-		return fmt.Errorf("job invalid: %w", err)
+		return errors.New("job invalid: " + err.Error())
 	}
 	if m.Attempt < 0 {
 		return errors.New("attempt must be >= 0")
@@ -736,7 +735,10 @@ type ProviderError struct {
 }
 
 func (e ProviderError) Error() string {
-	return fmt.Sprintf("%s provider error (%s): %s", e.Provider, e.Category, e.Op)
+	if e.Err != nil {
+		return e.Provider + " provider error (" + string(e.Category) + ") on " + e.Op + ": " + e.Err.Error()
+	}
+	return e.Provider + " provider error (" + string(e.Category) + "): " + e.Op
 }
 
 func (e ProviderError) Unwrap() error { return e.Err }
@@ -770,5 +772,5 @@ func WrapValidationErr(contract string, err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%s contract validation failed: %w", contract, err)
+	return errors.New(contract + " contract validation failed: " + err.Error())
 }
