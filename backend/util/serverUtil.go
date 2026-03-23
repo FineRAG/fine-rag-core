@@ -14,6 +14,8 @@ import (
 
 	"enterprise-go-rag/backend/managers"
 	"enterprise-go-rag/backend/util/apiutil"
+	"enterprise-go-rag/internal/adapters/parser/docling"
+	"enterprise-go-rag/internal/adapters/parser/extractous"
 	"enterprise-go-rag/internal/adapters/gateway/portkey"
 	"enterprise-go-rag/internal/contracts"
 	"enterprise-go-rag/internal/logging"
@@ -125,7 +127,26 @@ func NewServer(cfg Config, db *sql.DB, auditRepo contracts.AuditEventRepository,
 	s.Tenants = &managers.TenantManager{DB: db, ObjectStore: objectStoreClient, Index: vectorIndex, Bucket: cfg.UploadBucket}
 	s.KB = &managers.KnowledgeBaseManager{DB: db}
 	s.Uploads = &managers.UploadManager{Presign: s3.NewPresignClient(presignClient), UploadBucket: cfg.UploadBucket, UploadBaseURL: cfg.UploadBaseURL, PresignTTL: cfg.PresignTTL, MaxObjectBytes: cfg.MaxObjectBytes}
-	s.Ingestion = &managers.IngestionManager{DB: db, Index: vectorIndex, ObjectStore: objectStoreClient, Embedder: embeddingProvider, UploadBucket: cfg.UploadBucket, MaxObjectBytes: cfg.MaxObjectBytes, ChunkSizeChars: cfg.ChunkSizeChars, ChunkOverlapWords: cfg.ChunkOverlapWords}
+	s.Ingestion = &managers.IngestionManager{
+		DB:                db,
+		Index:             vectorIndex,
+		ObjectStore:       objectStoreClient,
+		Embedder:          embeddingProvider,
+		UploadBucket:      cfg.UploadBucket,
+		MaxObjectBytes:    cfg.MaxObjectBytes,
+		ChunkSizeChars:    cfg.ChunkSizeChars,
+		ChunkOverlapWords: cfg.ChunkOverlapWords,
+	}
+
+	if cfg.ParserType == "docling" {
+		s.Ingestion.Parser = docling.NewAdapter(docling.Config{
+			Endpoint: cfg.DoclingEndpoint,
+			Timeout:  120 * time.Second,
+		})
+	} else {
+		s.Ingestion.Parser = extractous.NewLibAdapter()
+	}
+
 	s.Search = &managers.SearchManager{Retrieval: retrievalSvc, LLM: answerGenerator, EmbeddingModel: cfg.EmbeddingModel, OpenRouterModel: cfg.OpenRouterModel}
 
 	return s, nil

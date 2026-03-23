@@ -4,9 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type IngestionManager struct {
 	MaxObjectBytes    int64
 	ChunkSizeChars    int
 	ChunkOverlapWords int
+	Parser            contracts.DocumentParser
 }
 
 func (m *IngestionManager) HandleSubmitJob(w http.ResponseWriter, r *http.Request) {
@@ -55,38 +57,70 @@ func (m *IngestionManager) HandleSubmitJob(w http.ResponseWriter, r *http.Reques
 	payloadJSON, _ := json.Marshal(payload)
 	totalFiles := m.inferTotalFiles(payload)
 	
-	logging.Logger.Info("indexing ingestion payload", zap.String("jobID", jobID), zap.String("tenantID", tenantID), zap.String("sourceURI", sourceURI), zap.Int("totalFiles", totalFiles))
-	chunkCount, payloadBytes, indexErr := m.indexPayloadArtifacts(r.Context(), contracts.TenantID(tenantID), jobID, checksum, sourceURI, payload)
-	if indexErr != nil {
-		logging.Logger.Error("indexing payload failed", zap.Error(indexErr), zap.String("jobID", jobID), zap.String("tenantID", tenantID))
-		util.WriteError(w, http.StatusBadRequest, "indexing_failed", indexErr.Error())
-		return
-	}
-	
-	jobStatus := "queued"
-	jobStage := "cleanup"
-	processedFiles, successfulFiles := 0, 0
-	if chunkCount > 0 {
-		jobStatus = "indexed"
-		jobStage = "indexed"
-		processedFiles = totalFiles
-		successfulFiles = totalFiles
-	}
-	
-	if chunkCount <= 0 {
-		chunkCount = util.MaxInt(totalFiles, 1)
-	}
-	if payloadBytes <= 0 {
-		payloadBytes = len(payloadJSON)
-	}
-	
+	logging.Logger.Info("queuing ingestion job", zap.String("jobID", jobID), zap.String("tenantID", tenantID), zap.String("sourceURI", sourceURI), zap.Int("totalFiles", totalFiles))
+
+	// Insert initial "indexing" status
 	_, err := m.DB.ExecContext(r.Context(), `INSERT INTO ingestion_jobs (job_id, tenant_id, source_uri, checksum, status, stage, processed_files, total_files, successful_files, failed_files, policy_code, policy_reason, source_mode, payload_json, chunk_count, payload_bytes, submitted_at, updated_at)
-	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18)`, jobID, tenantID, sourceURI, checksum, jobStatus, jobStage, processedFiles, totalFiles, successfulFiles, 0, "", "", sourceMode, string(payloadJSON), chunkCount, payloadBytes, now, now)
+	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18)`, jobID, tenantID, sourceURI, checksum, "indexing", "parsing", 0, totalFiles, 0, 0, "", "", sourceMode, string(payloadJSON), 0, 0, now, now)
 	if err != nil {
+		logging.Logger.Error("failed to create ingestion job record", zap.Error(err), zap.String("jobID", jobID))
 		util.WriteError(w, http.StatusInternalServerError, "job_submit_failed", err.Error())
 		return
 	}
-	util.WriteJSON(w, http.StatusCreated, map[string]any{"jobId": jobID, "sourceUri": sourceURI, "status": jobStatus, "stage": jobStage, "processedFiles": processedFiles, "totalFiles": totalFiles, "successfulFiles": successfulFiles, "failedFiles": 0, "submittedAt": now.Format(time.RFC3339)})
+
+	// Launch background processing
+	go m.processIngestionBackground(jobID, contracts.TenantID(tenantID), checksum, sourceURI, payload)
+
+	util.WriteJSON(w, http.StatusCreated, map[string]any{
+		"jobId":           jobID,
+		"sourceUri":       sourceURI,
+		"status":          "indexing",
+		"stage":           "parsing",
+		"totalFiles":      totalFiles,
+		"submittedAt":     now.Format(time.RFC3339),
+	})
+}
+
+func (m *IngestionManager) processIngestionBackground(jobID string, tenantID contracts.TenantID, checksum string, sourceURI string, payload map[string]any) {
+	// Use background context with a generous timeout for long-running extractions
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	logging.Logger.Info("starting background ingestion processing", zap.String("jobID", jobID), zap.String("tenantID", string(tenantID)))
+
+	chunkCount, payloadBytes, err := m.indexPayloadArtifacts(ctx, tenantID, jobID, checksum, sourceURI, payload)
+	
+	now := time.Now().UTC()
+	status := "indexed"
+	stage := "complete"
+	reason := ""
+	
+	if err != nil {
+		logging.Logger.Error("background ingestion failed", zap.Error(err), zap.String("jobID", jobID))
+		status = "failed"
+		stage = "error"
+		reason = err.Error()
+	} else {
+		logging.Logger.Info("background ingestion succeeded", zap.String("jobID", jobID), zap.Int("chunks", chunkCount))
+	}
+
+	totalFiles := m.inferTotalFiles(payload)
+	processed := totalFiles
+	successful := totalFiles
+	failed := 0
+	if err != nil {
+		successful = 0
+		failed = totalFiles
+	}
+
+	_, dbErr := m.DB.ExecContext(context.Background(), `UPDATE ingestion_jobs 
+		SET status = $1, stage = $2, policy_reason = $3, chunk_count = $4, payload_bytes = $5, 
+		    processed_files = $6, successful_files = $7, failed_files = $8, updated_at = $9 
+		WHERE job_id = $10`, status, stage, reason, chunkCount, payloadBytes, processed, successful, failed, now, jobID)
+	
+	if dbErr != nil {
+		logging.Logger.Error("failed to update ingestion job status", zap.Error(dbErr), zap.String("jobID", jobID))
+	}
 }
 
 func (m *IngestionManager) HandleListJobs(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +166,7 @@ func (m *IngestionManager) HandleJobStream(w http.ResponseWriter, r *http.Reques
 	}
 	emit := func(v any) {
 		b, _ := json.Marshal(v)
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", string(b))
+		_, _ = io.WriteString(w, "data: " + string(b) + "\n\n")
 		flusher.Flush()
 	}
 	rows, err := m.DB.QueryContext(r.Context(), `SELECT job_id, source_uri, status, COALESCE(stage,''), processed_files, total_files, successful_files, failed_files, COALESCE(policy_code,''), COALESCE(policy_reason,''), submitted_at
@@ -177,7 +211,8 @@ func (m *IngestionManager) indexPayloadArtifacts(ctx context.Context, tenantID c
 		return 0, 0, nil
 	}
 	if m.Embedder == nil {
-		return 0, 0, fmt.Errorf("embedding provider unavailable")
+		logging.Logger.Error("embedding provider unavailable", zap.String("jobID", jobID))
+		return 0, 0, errors.New("embedding provider unavailable")
 	}
 
 	localItemByPath := map[string]map[string]any{}
@@ -202,6 +237,7 @@ func (m *IngestionManager) indexPayloadArtifacts(ctx context.Context, tenantID c
 		retryCount int
 		tenantID   contracts.TenantID
 		jobID      string
+		objectKey  string
 	}
 	pending := make([]pendingChunk, 0, len(objectKeys))
 	indexedChunks, payloadBytes := 0, 0
@@ -215,13 +251,23 @@ func (m *IngestionManager) indexPayloadArtifacts(ctx context.Context, tenantID c
 		input := &s3.GetObjectInput{Bucket: &m.UploadBucket, Key: &key}
 		object, err := m.ObjectStore.GetObject(ctx, input)
 		if err != nil {
-			return 0, 0, fmt.Errorf("read object %q: %w", key, err)
+			logging.Logger.Error("read object failed", zap.String("key", key), zap.Error(err), zap.String("jobID", jobID))
+			return 0, 0, errors.New("read object " + key + ": " + err.Error())
 		}
+		
+		contentLength := int64(0)
+		if object.ContentLength != nil {
+			contentLength = *object.ContentLength
+		}
+		logging.Logger.Info("S3 object metadata", zap.String("key", key), zap.Int64("contentLength", contentLength), zap.Int64("maxObjectBytes", m.MaxObjectBytes))
+
 		payloadData, readErr := io.ReadAll(io.LimitReader(object.Body, m.MaxObjectBytes))
 		_ = object.Body.Close()
 		if readErr != nil {
-			return 0, 0, fmt.Errorf("read object body %q: %w", key, readErr)
+			logging.Logger.Error("read object body failed", zap.String("key", key), zap.Error(readErr), zap.String("jobID", jobID))
+			return 0, 0, errors.New("read object body " + key + ": " + readErr.Error())
 		}
+		logging.Logger.Info("read object body success", zap.String("key", key), zap.Int("readBytes", len(payloadData)))
 		payloadBytes += len(payloadData)
 
 		relativePath := key
@@ -244,12 +290,31 @@ func (m *IngestionManager) indexPayloadArtifacts(ctx context.Context, tenantID c
 		}
 
 		text := ""
-		if m.isPDFContent(declaredType, key) {
-			text = m.extractPDFSearchableText(payloadData)
-		} else if m.isTextLikeContent(declaredType, key) {
-			text = m.extractSearchableText(payloadData)
+		contentType := m.inferContentType(declaredType, key)
+		logging.Logger.Info("processing content", zap.String("key", key), zap.String("contentType", contentType), zap.Bool("hasParser", m.Parser != nil))
+		
+		if m.Parser != nil && m.isComplexContent(contentType) {
+			logging.Logger.Info("attempting complex parsing", zap.String("key", key), zap.String("contentType", contentType))
+			var pErr error
+			text, pErr = m.Parser.Parse(ctx, tenantID, contentType, payloadData)
+			if pErr != nil {
+				logging.Logger.Warn("complex parsing failed", zap.Error(pErr), zap.String("key", key))
+			} else {
+				logging.Logger.Info("complex parsing succeeded", zap.String("key", key), zap.Int("textLen", len(text)))
+			}
+		}
+
+		if text == "" {
+			if m.isPDFContent(declaredType, key) {
+				logging.Logger.Info("falling back to basic PDF extraction", zap.String("key", key))
+				text = m.extractPDFSearchableText(payloadData)
+			} else if m.isTextLikeContent(declaredType, key) {
+				logging.Logger.Info("falling back to basic text extraction", zap.String("key", key))
+				text = m.extractSearchableText(payloadData)
+			}
 		}
 		if text == "" {
+			logging.Logger.Warn("all extraction failed, using placeholder", zap.String("key", key))
 			text = "uploaded document " + relativePath + " for tenant " + string(tenantID)
 			if declaredType != "" {
 				text += " (" + declaredType + ")"
@@ -267,7 +332,7 @@ func (m *IngestionManager) indexPayloadArtifacts(ctx context.Context, tenantID c
 				chunkMetadata["person_hint"] = personHint
 			}
 			pending = append(pending, pendingChunk{
-				recordID:   fmt.Sprintf("vec-%s-%d-%d", jobID, keyIndex, chunkIndex),
+				recordID:   "vec-" + jobID + "-" + strconv.Itoa(keyIndex) + "-" + strconv.Itoa(chunkIndex),
 				tenantID:   tenantID,
 				jobID:      jobID,
 				chunkText:  chunk,
@@ -276,6 +341,7 @@ func (m *IngestionManager) indexPayloadArtifacts(ctx context.Context, tenantID c
 				sourceURI:  sourceURI,
 				checksum:   checksum,
 				retryCount: 0,
+				objectKey:  key,
 			})
 			indexedChunks++
 		}
@@ -290,10 +356,12 @@ func (m *IngestionManager) indexPayloadArtifacts(ctx context.Context, tenantID c
 	}
 	vectors, err := m.Embedder.Embed(ctx, tenantID, chunkTexts)
 	if err != nil {
-		return 0, 0, fmt.Errorf("embed chunks: %w", err)
+		logging.Logger.Error("embed chunks failed", zap.Error(err), zap.String("jobID", jobID))
+		return 0, 0, errors.New("embed chunks: " + err.Error())
 	}
 	if len(vectors) != len(pending) {
-		return 0, 0, fmt.Errorf("embedding count mismatch: got=%d want=%d", len(vectors), len(pending))
+		logging.Logger.Error("embedding count mismatch", zap.Int("got", len(vectors)), zap.Int("want", len(pending)), zap.String("jobID", jobID))
+		return 0, 0, errors.New("embedding count mismatch")
 	}
 
 	records := make([]contracts.VectorRecord, 0, len(pending))
@@ -309,6 +377,7 @@ func (m *IngestionManager) indexPayloadArtifacts(ctx context.Context, tenantID c
 			SourceURI:  item.sourceURI,
 			Checksum:   item.checksum,
 			RetryCount: item.retryCount,
+			ObjectKey:  item.objectKey,
 		})
 	}
 	if err := m.Index.Upsert(ctx, records); err != nil {
@@ -459,5 +528,43 @@ func (m *IngestionManager) extractSearchableText(payload []byte) string {
 		return text[:12000]
 	}
 	return text
+}
+
+func (m *IngestionManager) inferContentType(declared string, key string) string {
+	if declared != "" {
+		return declared
+	}
+	ext := strings.ToLower(key)
+	switch {
+	case strings.HasSuffix(ext, ".pdf"):
+		return "application/pdf"
+	case strings.HasSuffix(ext, ".docx"):
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case strings.HasSuffix(ext, ".doc"):
+		return "application/msword"
+	case strings.HasSuffix(ext, ".pptx"):
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case strings.HasSuffix(ext, ".ppt"):
+		return "application/vnd.ms-powerpoint"
+	case strings.HasSuffix(ext, ".png"):
+		return "image/png"
+	case strings.HasSuffix(ext, ".jpg"), strings.HasSuffix(ext, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(ext, ".txt"):
+		return "text/plain"
+	case strings.HasSuffix(ext, ".md"):
+		return "text/markdown"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func (m *IngestionManager) isComplexContent(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	return strings.Contains(ct, "word") ||
+		strings.Contains(ct, "officedocument") ||
+		strings.Contains(ct, "powerpoint") ||
+		strings.Contains(ct, "image/") ||
+		strings.Contains(ct, "pdf")
 }
 

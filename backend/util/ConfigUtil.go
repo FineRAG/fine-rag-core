@@ -38,6 +38,8 @@ type Config struct {
 	OpenRouterRetryMax     int
 	ChunkSizeChars         int
 	ChunkOverlapWords      int
+	ParserType             string // "extractous" or "docling"
+	DoclingEndpoint        string
 }
 
 func ConfigFromEnv() Config {
@@ -138,5 +140,7 @@ func ConfigFromEnv() Config {
 		OpenRouterRetryMax:     openRouterRetryMax,
 		ChunkSizeChars:         chunkSizeChars,
 		ChunkOverlapWords:      chunkOverlapWords,
+		ParserType:             strings.ToLower(apiutil.EnvOr("FINE_RAG_PARSER_TYPE", "extractous")),
+		DoclingEndpoint:        apiutil.EnvOr("FINE_RAG_DOCLING_ENDPOINT", "http://localhost:5000"),
 	}
 }

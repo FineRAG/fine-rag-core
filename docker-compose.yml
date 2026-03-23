@@ -36,6 +36,7 @@ services:
       FINE_RAG_OPENROUTER_RETRY_MAX: "3"
       FINE_RAG_CHUNK_SIZE_CHARS: "900"
       FINE_RAG_CHUNK_OVERLAP_WORDS: "30"
+      FINE_RAG_PARSER_TYPE: "extractous"
       OTEL_SERVICE_NAME: "finerag-backend"
       OTEL_EXPORTER_OTLP_PROTOCOL: "${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
@@ -90,6 +91,7 @@ services:
       - "14174:80"
     depends_on:
       - finerag-backend
+
 secrets:
   finerag_jwt_secret:
     file: ./secrets/finerag_jwt_secret.txt
